@@ -388,6 +388,9 @@ void GcodeSuite::G28() {
 
       UNUSED(homeZZ);
 
+      // Pad Z homing: start heating now, in parallel with the Z raise and XY homing
+      TERN_(PAD_Z_HOMING, if (doZ) pad_preheat());
+
       #if !HAS_Y_AXIS
         constexpr bool doY = false;
       #endif

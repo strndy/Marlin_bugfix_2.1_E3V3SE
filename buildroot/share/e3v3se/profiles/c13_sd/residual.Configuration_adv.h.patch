@@ -193,7 +193,7 @@
  
  #if defined(DISPLAY_SLEEP_MINUTES) || defined(LCD_BACKLIGHT_TIMEOUT_MINS)
    #define EDITABLE_DISPLAY_TIMEOUT      // Edit sleep / backlight timeout with M255 S<minutes> and a menu item
-@@ -2464,6 +2479,36 @@
+@@ -2464,6 +2479,40 @@
    #endif
  #endif
  
@@ -225,12 +225,16 @@
 +  #define PAD_NOISE_MAX       500  // Max idle min..max spread; more = halt before any descent
 +  #define PAD_COARSE_TRIGGER 1500  // Contact threshold of the first descent
 +  #define PAD_FINE_TRIGGER   1200  // Contact threshold of the slow measuring passes
++  // Touch at print temperature: targets already set (nozzle >= 50 °C, bed >= 30 °C, e.g. by the
++  // start G-code before G28) are used, otherwise these defaults. Both are waited for, then restored.
++  #define PAD_HOME_NOZZLE_TEMP 220 // (°C) Default nozzle temperature. 0 = touch cold, no heating at all.
++  #define PAD_HOME_BED_TEMP     50 // (°C) Default bed temperature. 0 = do not heat the bed.
 +#endif
 +
  // @section extruder
  
  /**
-@@ -2578,7 +2623,11 @@
+@@ -2578,7 +2627,11 @@
    #define PROBING_MARGIN_LEFT PROBING_MARGIN
    #define PROBING_MARGIN_RIGHT PROBING_MARGIN+10
    #define PROBING_MARGIN_FRONT PROBING_MARGIN
@@ -242,7 +246,7 @@
  #endif
  
  #if ANY(MESH_BED_LEVELING, AUTO_BED_LEVELING_UBL)
-@@ -3463,6 +3512,10 @@
+@@ -3463,6 +3516,10 @@
    #define  X_SLAVE_ADDRESS 0x03
    #define  Y_SLAVE_ADDRESS 0x03
    #define  Z_SLAVE_ADDRESS 0x03
@@ -253,7 +257,7 @@
    //#define X2_SLAVE_ADDRESS 0
    //#define Y2_SLAVE_ADDRESS 0
    //#define Z2_SLAVE_ADDRESS 0
-@@ -3474,7 +3527,7 @@
+@@ -3474,7 +3531,7 @@
    //#define  U_SLAVE_ADDRESS 0
    //#define  V_SLAVE_ADDRESS 0
    //#define  W_SLAVE_ADDRESS 0
@@ -262,7 +266,7 @@
    //#define E1_SLAVE_ADDRESS 0
    //#define E2_SLAVE_ADDRESS 0
    //#define E3_SLAVE_ADDRESS 0
-@@ -4265,9 +4318,7 @@
+@@ -4265,9 +4322,7 @@
  #if ENABLED(GCODE_MACROS)
    #define GCODE_MACROS_SLOTS       5  // Up to 10 may be used
    #define GCODE_MACROS_SLOT_SIZE  50  // Maximum length of a single macro
@@ -272,7 +276,7 @@
  #endif
  
  /**
-@@ -4562,9 +4613,7 @@
+@@ -4562,9 +4617,7 @@
  #if ENABLED(FREEZE_FEATURE)
    //#define FREEZE_PIN   -1   // Override the default (KILL) pin here
    #define FREEZE_STATE  LOW   // State of pin indicating freeze
@@ -282,7 +286,7 @@
    /**
     * Command P000 (REALTIME_REPORTING_COMMANDS and EMERGENCY_PARSER) or
     * FREEZE_PIN (FREEZE_FEATURE) initiates a soft feed hold that keeps
-@@ -4577,9 +4626,7 @@
+@@ -4577,9 +4630,7 @@
     * NOTE: Affects Laser PWM but DOES NOT pause Spindle, Fans, Heaters or other devices.
     */
    //#define SOFT_FEED_HOLD

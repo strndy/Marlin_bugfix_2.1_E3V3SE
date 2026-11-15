@@ -2508,6 +2508,10 @@
   #define PAD_NOISE_MAX       500  // Max idle min..max spread; more = halt before any descent
   #define PAD_COARSE_TRIGGER 1500  // Contact threshold of the first descent
   #define PAD_FINE_TRIGGER   1200  // Contact threshold of the slow measuring passes
+  // Touch at print temperature: targets already set (nozzle >= 50 °C, bed >= 30 °C, e.g. by the
+  // start G-code before G28) are used, otherwise these defaults. Both are waited for, then restored.
+  #define PAD_HOME_NOZZLE_TEMP 220 // (°C) Default nozzle temperature. 0 = touch cold, no heating at all.
+  #define PAD_HOME_BED_TEMP     50 // (°C) Default bed temperature. 0 = do not heat the bed.
 #endif
 
 // @section extruder

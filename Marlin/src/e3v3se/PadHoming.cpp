@@ -31,6 +31,7 @@
 #include "../module/stepper.h"
 #include "../module/temperature.h"
 #include "../lcd/marlinui.h"
+#include "../sd/cardreader.h"
 #if ENABLED(DWIN_CREALITY_LCD)
   #include "../lcd/dwin/creality/dwin.h"
 #endif
@@ -53,6 +54,29 @@ static_assert(PAD_NOISE_MAX > 0 && 2 * (PAD_NOISE_MAX) <= PAD_FINE_TRIGGER, "PAD
 static_assert(PAD_FINE_TRIGGER <= PAD_COARSE_TRIGGER && PAD_COARSE_TRIGGER <= 1000000, "Need PAD_FINE_TRIGGER <= PAD_COARSE_TRIGGER <= 1000000.");
 
 static HX711 pad_hx;
+
+// ---- Touch at print temperature ----
+// A target already set (e.g. by the print's start G-code) is used; below these it counts as unset.
+constexpr int16_t NOZZLE_SET_MIN = 50, BED_SET_MIN = 30;
+constexpr millis_t HEAT_LIMIT_MS = SEC_TO_MS(900);   // a hot bed can take minutes
+constexpr float TOUCH_RETRACT_MM = 1;                // pulled back against ooze, not restored
+static int16_t saved_nozzle = -1, saved_bed;         // targets before G28 (-1 = pad_preheat not run)
+
+static void pad_set_touch_targets() {
+  if (PAD_HOME_NOZZLE_TEMP <= 0) return;
+  const int16_t n = thermalManager.degTargetHotend(0);
+  thermalManager.setTargetHotend(n >= NOZZLE_SET_MIN ? n : int16_t(PAD_HOME_NOZZLE_TEMP), 0);
+  #if HAS_HEATED_BED
+    const int16_t b = thermalManager.degTargetBed();
+    thermalManager.setTargetBed(b >= BED_SET_MIN ? b : int16_t(PAD_HOME_BED_TEMP));
+  #endif
+}
+
+void pad_preheat() {
+  saved_nozzle = thermalManager.degTargetHotend(0);
+  saved_bed = TERN0(HAS_HEATED_BED, thermalManager.degTargetBed());
+  pad_set_touch_targets();
+}
 static int32_t pad_last_raw;
 static uint8_t pad_same_count;
 
@@ -135,6 +159,52 @@ static void pad_check(const long lift_steps) {
   if (!marlin.isRunning() || planner.has_blocks_queued()) pad_fail(F("interrupted"), lift_steps);
 }
 
+// Heat to the touch targets and wait for both (nozzle not yet over the pad), then retract.
+// M108, an SD abort or the time limit halts like any other failure (kill() turns heaters off).
+static void pad_heat_and_wait() {
+  pad_set_touch_targets();
+  if (PAD_HOME_NOZZLE_TEMP <= 0) return;
+  ui.set_status(F("Pad Z homing: heating"));
+  const millis_t limit = millis() + HEAT_LIMIT_MS;
+  millis_t next_report = 0;
+  marlin.heatup_start();                               // M108 (emergency parser) clears this
+  for (;;) {
+    marlin.idle(true);                                 // true: keep the steppers energized
+    const millis_t ms = millis();
+    const int16_t nt = thermalManager.degTargetHotend(0);
+    bool hot = thermalManager.wholeDegHotend(0) >= nt - 2;
+    #if HAS_HEATED_BED
+      const int16_t bt = thermalManager.degTargetBed();
+      hot = hot && (bt == 0 || thermalManager.wholeDegBed() >= bt - 2);
+    #endif
+    if (hot) break;
+    const bool cancelled = !marlin.is_heating() || card.flag.abort_sd_printing;
+    if (cancelled || ELAPSED(ms, limit)) {
+      marlin.heatup_done();
+      pad_fail(cancelled ? F("cancelled while heating") : F("heating timeout"));
+    }
+    if (ELAPSED(ms, next_report)) {
+      next_report = ms + 5000UL;
+      SERIAL_ECHOLNPGM("PAD_HOME: heating nozzle ", thermalManager.wholeDegHotend(0), "/", nt
+        #if HAS_HEATED_BED
+          , " bed ", thermalManager.wholeDegBed(), "/", bt
+        #endif
+      );
+    }
+  }
+  marlin.heatup_done();                                // left set, it would silence M155 reports
+
+  if (!thermalManager.tooColdToExtrude(0)) {
+    // Pull the melt back a little; logical E unchanged, the print's prime line makes it up
+    const float e_before = motion.position.e;
+    motion.position.e -= TOUCH_RETRACT_MM;
+    motion.goto_current_position(MMM_TO_MMS(1200));
+    planner.synchronize();
+    motion.position.e = e_before;
+    motion.sync_plan_position_e();
+  }
+}
+
 struct PadStats { int32_t vmin, vmax, avg; };
 
 // Baseline over n samples (after dropping the pending one). Halts on a bad or noisy sensor.
@@ -214,9 +284,19 @@ void pad_home_z() {
   const bool z_known = motion.axis_is_trusted(Z_AXIS) && !motion.axis_should_home(Z_AXIS);
   const float z_entry = motion.position.z;
 
+  // Targets to restore afterwards: those from before G28 (off if they were off)
+  const bool had_preheat = saved_nozzle >= 0;
+  const int16_t restore_nozzle = had_preheat ? saved_nozzle : thermalManager.degTargetHotend(0),
+                restore_bed = had_preheat ? saved_bed : TERN0(HAS_HEATED_BED, thermalManager.degTargetBed());
+  saved_nozzle = -1;
+
   // Z is unknown until this succeeds. 'Unhomed' also refuses babysteps meanwhile.
   motion.set_axis_untrusted(Z_AXIS);
   motion.set_axis_unhomed(Z_AXIS);
+
+  // Touch at print temperature. Before moving over the pad, so ooze doesn't drip on it.
+  motion.sync_plan_position();
+  pad_heat_and_wait();
 
   // X/Y only, at the current height (G28 has already raised Z)
   motion.sync_plan_position();
@@ -305,7 +385,12 @@ void pad_home_z() {
   TERN_(BABYSTEP_DISPLAY_TOTAL, babystep.reset_total(Z_AXIS));
   TERN_(HAS_WORKSPACE_OFFSET, motion.workspace_offset.z = 0);
 
-  SERIAL_ECHOLNPGM("PAD_HOME: done, Z=", p_float_t(motion.position.z, 3), " (M206 Z ", p_float_t(z_shift, 3), ")");
+  // Back to the targets from before G28
+  thermalManager.setTargetHotend(restore_nozzle, 0);
+  TERN_(HAS_HEATED_BED, thermalManager.setTargetBed(restore_bed));
+
+  SERIAL_ECHOLNPGM("PAD_HOME: done, Z=", p_float_t(motion.position.z, 3), " (M206 Z ", p_float_t(z_shift, 3),
+                   "), nozzle target ", restore_nozzle, " bed target ", restore_bed);
   ui.reset_status();
 }
 

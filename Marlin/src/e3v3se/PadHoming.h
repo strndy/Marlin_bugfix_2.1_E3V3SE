@@ -29,6 +29,10 @@
   // On ANY failure it calls kill(): heaters off, printer halted until reset.
   void pad_home_z();
 
+  // Called by G28 before X/Y homing when Z will be homed: remembers the current targets and
+  // starts heating to the touch temperatures (print temperature if set, else the defaults).
+  void pad_preheat();
+
   // M8015 T[seconds]: print live HX711 readings without moving anything.
   void pad_sensor_report(const uint8_t seconds);
 
