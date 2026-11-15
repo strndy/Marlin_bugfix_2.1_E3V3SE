@@ -75,6 +75,9 @@ lin 3D Printer Firmware
 
 #include "../../../e3v3se/AutoOffset.h"
 #include "../../../e3v3se/PLRSettings.h"
+#if ENABLED(MANUAL_Z_HOMING)
+  #include "../../../e3v3se/ManualZHome.h"
+#endif
 
 // #include <QRCodeGenerator.h>
 
@@ -11276,6 +11279,138 @@ void HMI_Boot_Set() // Boot settings
   }
 }
 
+#if ENABLED(MANUAL_Z_HOMING)
+  //
+  // Manual Z homing prompt (e3v3se/ManualZHome.cpp). Like the advanced pause screen, it
+  // takes over the display and the knob from whatever screen issued G28 and hands back.
+  //
+  static bool mz_active = false, mz_keep_thumbnail = false, mz_cancel_selected = false;
+  static uint8_t mz_prev_key = MainMenu;
+  static ManualZScreen mz_screen = MZS_HEATING;
+  static ManualZReply mz_reply = MZR_NONE;
+  static millis_t mz_input_ms = 0;
+
+  static void Draw_ManualZ_Options() {
+    DWIN_Draw_Rectangle(1, Color_Bg_Black, 0, 214, DWIN_WIDTH - 1, 240);
+    DWIN_Draw_String(false, false, font6x12, mz_cancel_selected ? Color_White : Color_Yellow,
+                     Color_Bg_Black, 8, 222, F("> Touching: set Z=0"));
+    DWIN_Draw_String(false, false, font6x12, mz_cancel_selected ? Color_Yellow : Color_White,
+                     Color_Bg_Black, 170, 222, F("> Cancel"));
+  }
+
+  static void Draw_ManualZ_Temp() {
+    DWIN_Draw_IntValue(true, true, 0, font8x16, Color_White, Color_Bg_Black, 3, 68, 156, thermalManager.wholeDegHotend(0));
+  }
+
+  void DWIN_ManualZ_Show(const ManualZScreen screen, FSTR_P const reason/*=nullptr*/) {
+    if (!mz_active) {
+      mz_active = true;
+      mz_prev_key = checkkey;
+      mz_keep_thumbnail = TERN0(DWIN_RENDER_THUMBNAIL, hasThumbnail);
+    }
+    mz_screen = screen;
+    mz_reply = MZR_NONE;
+    mz_cancel_selected = false;
+    mz_input_ms = millis() + 1500;      // Ignore a click that was meant for the previous screen
+    checkkey = ManualZPrompt;
+    EncoderRate.enabled = false;
+    DWIN_Backlight_SetLuminance(MAX_SCREEN_BRIGHTNESS);  // The display may have dimmed
+    if (mz_keep_thumbnail) {
+      Clear_Title_Bar();
+      DWIN_Draw_Rectangle(1, Color_Bg_Black, 0, 123, DWIN_WIDTH - 1, STATUS_Y - 1);
+    }
+    else Clear_Main_Window();
+    Draw_Title(F("Manual Z home"));
+    switch (screen) {
+      case MZS_HEATING:
+        DWIN_Draw_String(false, false, font8x16, Color_Yellow, Color_Bg_Black, 12, 132, F("Heating, please wait"));
+        DWIN_Draw_String(false, false, font8x16, Color_White, Color_Bg_Black, 12, 156, F("Nozzle     /" STRINGIFY(MANUAL_Z_HOME_TEMP) " C"));
+        Draw_ManualZ_Temp();
+        DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 12, 186, F("Then you lower Z by hand."));
+        DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 12, 204, F("Click the knob to cancel."));
+        break;
+      case MZS_TOUCH:
+        DWIN_Draw_String(false, false, font8x16, Color_Yellow, Color_Bg_Black, 12, 128, F("Z motor is released"));
+        DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 8, 152, F("1. Wipe the nozzle clean (HOT!)"));
+        DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 8, 167, F("2. Turn the Z screw by hand until"));
+        DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 8, 182, F("   the nozzle touches the bed"));
+        DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 8, 197, F("3. Click the knob"));
+        Draw_ManualZ_Options();
+        break;
+      case MZS_FAILED:
+        DWIN_Draw_String(false, false, font8x16, Color_Red, Color_Bg_Black, 12, 132, F("Z is NOT homed"));
+        if (reason) DWIN_Draw_String(false, false, font6x12, Color_Yellow, Color_Bg_Black, 8, 160, reason);
+        DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 8, 180, F("Nozzle heater is off."));
+        DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 8, 195, F("Moves are blocked until Z is homed."));
+        break;
+    }
+    Draw_Mid_Status_Area(true);
+    DWIN_UpdateLCD();
+    #if PIN_EXISTS(BEEPER)
+      if (screen != MZS_HEATING)        // Attention: the user has to act (or homing failed)
+        for (uint8_t i = 0; i < 2; ++i) { WRITE(BEEPER_PIN, HIGH); delay(80); WRITE(BEEPER_PIN, LOW); delay(80); }
+    #endif
+  }
+
+  ManualZReply DWIN_ManualZ_Reply() {
+    const ManualZReply reply = mz_reply;
+    mz_reply = MZR_NONE;
+    return reply;
+  }
+
+  // Put back the screen that was showing when G28 started
+  void DWIN_ManualZ_End(const bool ok) {
+    if (!mz_active) return;
+    mz_active = false;
+    const bool sd_job = card.isPrinting();
+    if (sd_job || mz_prev_key == PrintProcess || mz_prev_key == Tune
+      TERN_(DWIN_RENDER_THUMBNAIL, || mz_prev_key == ThumbPrint || mz_prev_key == ThumbTune)
+    ) {
+      #if ENABLED(DWIN_RENDER_THUMBNAIL)
+        if (mz_keep_thumbnail) {
+          Show_JPN_print_title();
+          Goto_ThumbPrint(false);
+        }
+        else
+      #endif
+        Goto_PrintProcess();
+      if (!ok && sd_job) {
+        // Z is unknown: stop the SD print the same way a removed card does
+        card.abortFilePrintSoon();
+        dwin_abort_flag = true;         // Back to the main menu once the abort has run
+      }
+    }
+    else if (mz_prev_key == Last_Prepare || mz_prev_key == Back_Main) {
+      checkkey = mz_prev_key;           // DWIN_CompletedHoming() finishes this flow
+      Popup_Window_Home();
+    }
+    else
+      Goto_MainMenu();
+    DWIN_UpdateLCD();
+  }
+
+  static void HMI_ManualZ() {
+    const millis_t ms = millis();
+    if (mz_screen == MZS_HEATING) {
+      static millis_t next_temp_ms = 0;
+      if (ELAPSED(ms, next_temp_ms)) {
+        next_temp_ms = ms + 1000;
+        Draw_ManualZ_Temp();
+        DWIN_UpdateLCD();
+      }
+    }
+    const ENCODER_DiffState state = get_encoder_state();
+    if (state == ENCODER_DIFF_NO || mz_screen == MZS_FAILED || PENDING(ms, mz_input_ms)) return;
+    if (state == ENCODER_DIFF_ENTER)
+      mz_reply = (mz_screen == MZS_TOUCH && !mz_cancel_selected) ? MZR_CONFIRM : MZR_CANCEL;
+    else if (mz_screen == MZS_TOUCH) {
+      mz_cancel_selected = (state == ENCODER_DIFF_CW);
+      Draw_ManualZ_Options();
+      DWIN_UpdateLCD();
+    }
+  }
+#endif // MANUAL_Z_HOMING
+
 #if ENABLED(ADVANCED_PAUSE_FEATURE)
   static bool pause_ui_active = false, pause_resume_selected = true;
   static bool pause_option_sensor_out = false;
@@ -12483,6 +12618,11 @@ void DWIN_HandleScreen()
   #if ENABLED(ADVANCED_PAUSE_FEATURE)
     case AdvancedPause:
       HMI_AdvancedPause();
+      break;
+  #endif
+  #if ENABLED(MANUAL_Z_HOMING)
+    case ManualZPrompt:
+      HMI_ManualZ();
       break;
   #endif
   case MainMenu:

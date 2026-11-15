@@ -139,3 +139,12 @@ The Makefile/test runner supports `GIT_RESET_HARD`, which can run `git reset --h
 - Native regressions cover manual/workflow feature combinations, menu edits and bounds, Stepper delay/enabled/damping state, ISR restoration and synchronization. Physical resonance tuning still requires printer testing.
 - The Stepper frequency setter now casts only the enabled delay calculation, preserving the integer off sentinel on 32-bit timers instead of converting it through float. Regression coverage includes 16-bit and 32-bit timer types.
 - Visibility regression `test/test_dwin_input_shaping_visibility.py` enters via the real Control and Motion handlers, records the actual label/icon drawing calls, checks viewport bounds and post-draw visibility, and returns from the real submenu. It covers image/text labels, optional jerk/skew rows and menu disabled. The redundant Skew drawing call using a pixel Y as a row was removed. Skew menu measurement variables also have definitions initialized from the configured XY defaults, fixing the existing link failure when its menu is selected.
+
+## Manual Z homing (`MANUAL_Z_HOMING`, branch `manual-z-homing`)
+
+- Off by default; not tested on hardware. `G28` with Z heats the nozzle, parks at the touch-off XY, switches only the Z driver off and waits for a knob click. Logic is fork-owned in `src/e3v3se/ManualZHome.*`; the prompt screen is `ManualZPrompt` in `lcd/dwin/creality/dwin.cpp` (modelled on the advanced-pause screen).
+- C13 has one enable pin (PC3) for X/Y/Z/E. Z is released with `stepperZ.toff(0)` over TMC UART and switched on again with `chopper_timing_Z.toff`, read back through `CHOPCONF` (`MANUAL_Z_HOME_VERIFY_UART`). A re-enable that can't be confirmed calls `kill()`.
+- Upstream-owned hooks: `G28.cpp` (preheat, skip `bltouch.init()`, call `manual_z.home()`), `motion.cpp` (`gcode_motion_ignored()` refuses moves after a failed home until Z is homed), `G29.cpp` (final re-home is `G28XY`).
+- Failure (cancel, timeout, `M108`/`M524`, UART): nozzle heater off, logical Z set to 0 then +clearance so later absolute Z moves can only be too high, SD print aborted via `dwin_abort_flag`.
+- Host regression: `test/test_manual_z_homing.py` compiles the real `ManualZHome.cpp` against stubs. ON build: flash +3.3 KB, RAM +12 B.
+- The residual profile patch was edited by hand (no `upstream/bugfix-2.1.x` ref in the shallow clone); rerun `config_profile.py derive` and the guardrails where upstream is available.

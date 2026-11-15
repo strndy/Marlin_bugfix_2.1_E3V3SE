@@ -18,6 +18,7 @@ The goal of this repository is simple: **pull upstream Marlin at any time withou
 - [Guardrails](#guardrails)
 - [Merging upstream](#merging-upstream)
 - [Host (OctoPrint) integration](#host-octoprint-integration)
+- [Manual Z homing without the probe](#manual-z-homing-without-the-probe)
 - [Building](#building)
   - [Building with GitHub Actions](#building-with-github-actions)
 - [Memory budget](#memory-budget)
@@ -179,6 +180,7 @@ Some options depend on others. For example, `ONE_CLICK_PRINT` requires `NO_SD_AU
 | Ignore bed MINTEMP (off by default) | `E3V3SE_IGNORE_BED_MINTEMP` | `Configuration.h` |
 | Input shaping menu (legacy X/Y) | `DWIN_INPUT_SHAPING_MENU` | `Configuration_adv.h` |
 | Linear Advance | `LIN_ADVANCE` | `Configuration_adv.h` |
+| Manual Z homing without the probe (off by default) | `MANUAL_Z_HOMING` | `Configuration.h` |
 | MeatPack on serial port 1 | `MEATPACK_ON_SERIAL_PORT_1` | `Configuration_adv.h` (on in `c13_octoprint`) |
 | OctoPrint plugin layer | `OCTOPRINT_PLUGIN` | `Configuration.h` (`c13_octoprint` only) |
 | One-click print | `ONE_CLICK_PRINT` | `Configuration_adv.h` |
@@ -293,6 +295,51 @@ The `c13_octoprint` profile enables the host layer in `Marlin/src/e3v3se/OctoHos
 
 This override should not be enabled when the bed sensor is required for safe
 operation. A disconnected sensor can otherwise go unnoticed.
+
+## Manual Z homing without the probe
+
+`MANUAL_Z_HOMING` (off by default, C13 only so far, **not yet tested on a printer**) replaces the probed Z home with a touch-off done by hand, so the CR Touch can be unclipped for printing. The probe stays configured: clip it back on whenever you want a new mesh.
+
+**Enable:** uncomment `MANUAL_Z_HOMING` in `Configuration.h` (run `config_profile.py derive` afterwards), or tick **MANUAL_Z_HOMING** in the GitHub Actions build dialog. The settings below it are the touch-off temperature (220 °C), XY position (bed centre), retract (1 mm), Z offset (0), clearance (5 mm) and timeout (600 s).
+
+**What `G28` does when it homes Z** (`G28 X Y` is unchanged):
+
+1. Starts heating the nozzle, raises Z a little, homes X and Y and moves the nozzle to the touch-off point.
+2. Shows **Heating, please wait** until the nozzle is hot, then retracts 1 mm.
+3. Beeps twice and shows **Z motor is released**. Only the Z motor is off; X, Y and E stay locked.
+4. You wipe the nozzle clean, turn the Z screw by hand until the nozzle just touches the bed, and click the knob.
+5. Z is set to 0 (plus `MANUAL_Z_HOME_OFFSET`), the nozzle lifts to 5 mm, the nozzle target goes back to what it was before `G28`, leveling is switched on again and the job continues.
+
+Turning the knob to **Cancel**, clicking it while heating, `M108` from a host, or the timeout all end the same way: nozzle heater off, Z motor on again, a 5 mm lift, **Z is NOT homed**, a running SD print is stopped, and G-code moves are refused until a later `G28` succeeds.
+
+**Decisions worth knowing**
+
+- The board has one enable pin for all four motors, so Z is released by switching its driver off over TMC UART (`TOFF=0`). If the firmware reports `Z driver not responding` although `M122` works, rebuild with `MANUAL_Z_HOME_VERIFY_UART` commented out.
+- If the nozzle was off before `G28`, it is switched off again afterwards. Put `M104 S<print temp>` before `G28` in your start G-code to avoid a cool-down.
+- The 1 mm retract is not undone; a prime line or skirt makes it up.
+- Positive `MANUAL_Z_HOME_OFFSET` prints closer to the bed. `M206 Z` adds to it without a rebuild. Babystepping from the Tune menu works for the running print but is not kept for the next manual home.
+- `G29` no longer homes Z a second time when it finishes; it homes X and Y only and keeps your touch-off.
+
+**First test**
+
+1. With the printer cold and the nozzle 50 mm up, switch the printer off and watch whether the gantry sinks. If it does, it will also sink when Z is released: keep a hand on the screw.
+2. Send `M122` and check that Z answers. Then run `G28` from a terminal with the bed clear and read the `MANUAL_Z:` lines. Check that Z turns freely by hand while X and Y stay locked, and that Z holds again after the click.
+3. Try each way out once: confirm, **Cancel**, and `M108`. After a cancel, `G1` must be refused with a "Home Z first" message.
+4. Print a first layer and trim with `MANUAL_Z_HOME_OFFSET` or `M206 Z`.
+
+**Mesh workflow**
+
+- Probe off (printing): start G-code uses `G28` and no `G29`. `G28` re-enables the mesh stored in EEPROM; `M420 S1` after it does no harm. Leave **level calibration** off on the print confirmation page, because it probes.
+- Probe on (new mesh): run **Leveling** from the LCD or `G28` then `G29`. You touch off once by hand, the probe measures the mesh, and it is saved. A wrong probe Z offset (`M851 Z`) shifts the whole mesh by that amount, so check that the centre values are close to 0 (`M420 V`).
+- Auto Z-offset (`M8015`), the first-boot wizard and level calibration need the probe and were not adapted.
+
+**Unverified risks**
+
+- Nothing here has run on hardware. A host test (`test/test_manual_z_homing.py`) covers the state machine only.
+- When Z is switched on again the rotor snaps to the nearest holding position: up to ±2 full steps, ±0.08 mm, and it differs from one homing to the next.
+- The Z driver's UART reads may not work on every board; the gantry may sink when released; the prompt may not restore every LCD screen correctly (it returns to the main menu when unsure).
+- A hot nozzle resting on PEI for minutes can mark the sheet. Do not walk away during the prompt; the timeout lifts the nozzle and turns the heater off.
+- `M84`, **Disable steppers** or a reset lose the Z reference, as with any homing.
 
 ## Building
 

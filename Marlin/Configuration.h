@@ -2004,6 +2004,24 @@
 #if ENABLED(DWIN_ZHOME_MENU)
   extern uint8_t CZ_AFTER_HOMING; 
 #endif
+
+/**
+ * E3V3SE: Manual ("hand-turn") Z homing. See README "Manual Z homing".
+ * G28 homes X/Y as usual, then heats and parks the nozzle, switches only the Z driver
+ * off over TMC UART (the enable pin is shared by X/Y/Z/E) and waits until the user has
+ * lowered the nozzle onto the bed by hand and clicked the knob. G28 never uses the probe.
+ */
+//#define MANUAL_Z_HOMING
+#if ENABLED(MANUAL_Z_HOMING)
+  #define MANUAL_Z_HOME_TEMP        220       // (C) Nozzle temperature for the touch-off. 0 = do not heat.
+  #define MANUAL_Z_HOME_X_POINT     X_CENTER  // (mm) Nozzle X for the touch-off
+  #define MANUAL_Z_HOME_Y_POINT     Y_CENTER  // (mm) Nozzle Y for the touch-off
+  #define MANUAL_Z_HOME_RETRACT     1.0       // (mm) Retract before the touch-off to limit ooze (not restored). 0 = none.
+  #define MANUAL_Z_HOME_OFFSET      0.0       // (mm) Z assigned when the knob is clicked. Positive = print closer to the bed.
+  #define MANUAL_Z_HOME_CLEARANCE   5         // (mm) Z to raise to after the click
+  #define MANUAL_Z_HOME_TIMEOUT_SEC 600       // (s) Limit for heating and for the click. Then: heater off, Z not homed.
+  #define MANUAL_Z_HOME_VERIFY_UART           // Read the Z driver back over UART when switching it off/on. Disable only if the check fails although M122 works.
+#endif
 //#define XY_AFTER_HOMING { 10, 10 }  // (mm) Move to an XY position after homing (and raising Z)
 
 //#define EVENT_GCODE_AFTER_HOMING "M300 P440 S200"  // Commands to run after G28 (and move to XY_AFTER_HOMING)

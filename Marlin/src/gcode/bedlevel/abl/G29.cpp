@@ -1072,7 +1072,9 @@ G29_TYPE GcodeSuite::G29() {
 
    settings.save();
   // auto home
-  process_subcommands_now(F("G28"));
+  // With manual Z homing, keep the Z reference taken by hand before this G29
+  // instead of asking for a second touch-off. Only X and Y are homed again.
+  process_subcommands_now(F(TERN(MANUAL_Z_HOMING, "G28XY", "G28")));
   process_subcommands_now(F("G1 Z10"));  //After leveling is completed, go to the stage to 10mm
 
   #if DISABLED(SHOW_GRID_VALUES)  //Do not display grid values

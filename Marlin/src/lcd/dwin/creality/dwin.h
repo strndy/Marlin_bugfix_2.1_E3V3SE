@@ -87,6 +87,9 @@ enum processID : uint8_t {
   #if ENABLED(ADVANCED_PAUSE_FEATURE)
     AdvancedPause,
   #endif
+  #if ENABLED(MANUAL_Z_HOMING)
+    ManualZPrompt,
+  #endif
   AxisMove,
   TemperatureID,
   MotionMenu,
