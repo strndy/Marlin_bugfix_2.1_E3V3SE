@@ -13,6 +13,7 @@ The goal of this repository is simple: **pull upstream Marlin at any time withou
 - [Project structure](#project-structure)
 - [Configuration profiles](#configuration-profiles)
 - [Enabling and disabling features by hand](#enabling-and-disabling-features-by-hand)
+- [Pad Z homing (experimental)](#pad-z-homing-experimental)
 - [Input shaping with FT_Motion (`M493`)](#input-shaping-with-ft_motion-m493)
 - [Linear Advance: legacy vs FT_Motion](#linear-advance-legacy-vs-ft_motion)
 - [Guardrails](#guardrails)
@@ -182,6 +183,7 @@ Some options depend on others. For example, `ONE_CLICK_PRINT` requires `NO_SD_AU
 | MeatPack on serial port 1 | `MEATPACK_ON_SERIAL_PORT_1` | `Configuration_adv.h` (on in `c13_octoprint`) |
 | OctoPrint plugin layer | `OCTOPRINT_PLUGIN` | `Configuration.h` (`c13_octoprint` only) |
 | One-click print | `ONE_CLICK_PRINT` | `Configuration_adv.h` |
+| Pad Z homing, experimental (off by default) | `PAD_Z_HOMING` | `Configuration.h`, tunables `PAD_*` in `Configuration_adv.h` |
 | Power-loss recovery and LCD menu (off by default) | `POWER_LOSS_RECOVERY`, `DWIN_PLR_MENU` | `Configuration_adv.h` |
 | Preheat completion alert | `PREHEAT_ALERT` | `Configuration.h` |
 | Thumbnail rendering | `DWIN_RENDER_THUMBNAIL` | `Configuration.h` |
@@ -208,6 +210,42 @@ The assessment selects the best rating that satisfies **both** original limits:
 | HORRIBLE | Above either BAD limit | Above either BAD limit |
 
 Missing measurements appear gray and receive `INCOMPLETE` instead of a quality rating; an uninitialized mesh shows a message to run bed leveling. The viewer sends one drawing command at a time with at least `BED_LEVEL_VISUALIZER_DRAW_DELAY_MS` between commands (10 ms by default, minimum 5 ms). This pacing covers the initial screen, QR, legend, surface rectangles and grid lines, preventing an uninterrupted flood of drawing commands. Increase the interval, for example to 20 ms, if a panel needs more time. Pressing the encoder returns to Leveling with Bed Level Map selected, even while drawing; temperature management continues between commands. The viewer reads a snapshot of the mesh without moving the printer or changing calibration. It requires `AUTO_BED_LEVELING_BILINEAR` and can be selected in the GitHub Actions build dialog (the workflow toggle defaults to off).
+
+## Pad Z homing (experimental)
+
+`PAD_Z_HOMING` (off by default) homes Z by touching the **nozzle** on the bed strain-gauge pad at the front-left bed mount (`AUTOZ_TOOL_X/Y`, the HX711 sensor of the automatic Z-offset) instead of homing with the CR Touch. The CR Touch stays configured, so `G29` and the automatic Z-offset still work when it is clipped on, but `G28` never deploys or reads it and works with the probe unplugged.
+
+**This has only been compiled, never run on a printer. The thresholds are estimates. Follow the first-test procedure.**
+
+Enable it by uncommenting `#define PAD_Z_HOMING` in `Configuration.h` (then follow the profile steps above), or tick **PAD_Z_HOMING** in the GitHub Actions build dialog. EEPROM layout is unchanged.
+
+What `G28` does with the option on: X/Y home as usual, the nozzle moves over the pad, the sensor is checked (answers, not stuck, not saturated, quiet) before any descent, Z steps down 0.05 mm per HX711 sample until the force rises, backs off 1 mm, measures the contact three times in 0.02 mm steps (median, spread check), sets Z and lifts. `G28 Z` does the same after homing X/Y if needed; the `H` parameter is ignored. Every stage prints a `PAD_HOME:` line with its numbers. **Any failure halts the printer** (`kill()`: heaters off, message on the LCD and serial, motors keep holding; power-cycle to continue). There is no retry.
+
+### First test
+
+1. Cold, clean nozzle tip (no blob), empty bed, serial terminal connected, **hand on the power switch**.
+2. Send `M8015 T` (nothing moves; prints readings for 10 s). At rest `delta` should wander by much less than `PAD_NOISE_MAX` (500). Press the bed at the front-left corner with a finger: `delta` must jump well past `PAD_COARSE_TRIGGER` (1500). If it does not, **do not run `G28`**; adjust the `PAD_*` thresholds or check the sensor.
+3. Abort test in the air: jog Z so the nozzle is 50 mm or more above the bed and send `G28`. Check that Z goes **down** in the slow descent (power off if it goes up). While it descends, press the bed firmly at the front-left corner. The descent must stop at once and back off 1 mm; then the printer halts with `fine pass: no contact in range` (or `pad still loaded after backoff` / `sensor noisy after contact` if you keep pressing). That halt is the expected result. Power-cycle.
+4. Real test: nozzle about 20 mm above the bed, `G28`. Expect one touch, a 1 mm lift, three slow touches, then a lift. Power off if the nozzle keeps pushing into the bed. Afterwards send `M420 S0` and `G1 Z0.1 F300` and slide a sheet of paper under the nozzle: it should just drag.
+5. Repeatability: send `G28` five more times. From the second homing on, the line `PAD_HOME: contact moved by ... mm since the previous homing` should stay within a few hundredths of a millimetre, and `spread_mm` at 0.02 or less.
+
+### Z offset and mesh
+
+- Z0 is the nozzle contact on the pad, plus `PAD_Z_COMPENSATION_MM` (build time) plus `M206 Z` (stored with `M500`, applied at the next `G28`; positive = nozzle closer to the bed; the sum is limited to ±1 mm, larger values halt).
+- The probe Z offset (`M851 Z`, LCD Z-offset) is **not** used for homing. It only matters while `G29` measures the mesh: an offset that is wrong by some amount shifts the whole stored mesh by that amount.
+- Changing the Z-offset from the LCD during a print still moves the nozzle at once, but only until the next `G28`. To keep it, either re-run leveling with the probe on (the new offset is then part of the mesh), or put the correction into `M206 Z` and `M500`.
+- Making a mesh: clip the CR Touch on and plug it in (printer off), then run leveling from the LCD (automatic Z-offset, then `G29`) or send `G28` + `G29`; the mesh is saved. The automatic Z-offset routine (`M8015`) homes Z with the probe while it runs, as in the stock firmware, and re-homes on the pad before the mesh is measured, so the mesh is always relative to the pad contact. Power off, unplug the probe, print. `G28` re-enables the stored mesh by itself (`ENABLE_LEVELING_AFTER_G28`); `M420 S1` in the start G-code does no harm. Remove `G29` and `M8015` from the start G-code: with the probe unplugged they stop the printer with a probe error.
+
+### Not verified
+
+- Nothing was tested on hardware: sensor polarity, noise, sample rate and the force per millimetre are unknown, and all thresholds are in raw HX711 counts.
+- A strain gauge that looks alive but does not react to load cannot be detected before contact. The nozzle would then push into the bed until the travel limit (the full Z height on the first homing after power-on, expected height + 5 mm afterwards). Steps 2 and 3 exist to rule this out.
+- Z is stepped directly at 4 mm/s without acceleration; lost steps on the way up would shift the result.
+- Bed or nozzle heating may disturb the sensor and cause a halt; a halt at print start needs a power cycle.
+- A hot nozzle can mark the bed surface at the pad, and ooze under the nozzle makes Z read high.
+- The bed bends slightly under the trigger force, so the first layer may need a constant correction.
+- The automatic Z-offset / LCD leveling flow with the option on (probe homing during the routine, pad homing after it) is untested as well.
+- With the probe unplugged its input reads "triggered" and the servo commands at boot and at `G28` go nowhere. From the code this is harmless because nothing reads the probe outside probing, but it has not been tried.
 
 ## Input shaping with FT_Motion (`M493`)
 

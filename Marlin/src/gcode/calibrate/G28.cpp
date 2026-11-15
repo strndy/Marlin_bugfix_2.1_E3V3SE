@@ -70,6 +70,10 @@
   #include "../../feature/spindle_laser.h"
 #endif
 
+#if ENABLED(PAD_Z_HOMING)
+  #include "../../e3v3se/PadHoming.h"
+#endif
+
 #define DEBUG_OUT ENABLED(DEBUG_LEVELING_FEATURE)
 #include "../../core/debug_out.h"
 
@@ -487,6 +491,11 @@ void GcodeSuite::G28() {
               stepper.set_separate_multi_axis(false);
             #endif
 
+            #if ENABLED(PAD_Z_HOMING)
+              if (!pad_home_suspended)
+                pad_home_z(); // Nozzle touch on the strain-gauge pad. Never uses the probe.
+              else
+            #endif
             #if ENABLED(Z_SAFE_HOMING)
               // H means hold the current X/Y position when probing.
               // Otherwise move to the define safe X/Y position before homing Z.

@@ -65,6 +65,10 @@ on:
         description: "ONE_CLICK_PRINT (SD card only; keep off for OctoPrint)"
         type: boolean
         default: true
+      pad_z_homing:
+        description: "PAD_Z_HOMING (EXPERIMENTAL: home Z on the strain-gauge pad; read the README first)"
+        type: boolean
+        default: false
       power_loss_recovery:
         description: "POWER_LOSS_RECOVERY + DWIN_PLR_MENU (SD recovery and advanced LCD menu; uses memory)"
         type: boolean
@@ -118,6 +122,7 @@ jobs:
             FT_MOTION=${{ inputs.ft_motion }} \
             MEATPACK_ON_SERIAL_PORT_1=${{ inputs.meatpack }} \
             ONE_CLICK_PRINT=${{ inputs.one_click_print }} \
+            PAD_Z_HOMING=${{ inputs.pad_z_homing }} \
             POWER_LOSS_RECOVERY=${{ inputs.power_loss_recovery }} \
             PREHEAT_ALERT=${{ inputs.preheat_alert }} \
             SKEW_CORRECTION=${{ inputs.skew_correction }} \

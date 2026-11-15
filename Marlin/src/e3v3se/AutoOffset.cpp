@@ -4,6 +4,9 @@
 #if ENABLED(FT_MOTION)
   #include "../module/ft_motion.h"
 #endif
+#if ENABLED(PAD_Z_HOMING)
+  #include "PadHoming.h"
+#endif
 
 #if ENABLED(USE_AUTOZ_TOOL_2)
 
@@ -793,6 +796,11 @@ bool getZOffset(bool isNozzleClr, bool isRunProByPress, bool isRunProByTouch, fl
   TERN_(FT_MOTION, FTM_DISABLE_IN_SCOPE());
   bool succeeded;
   {
+    #if ENABLED(PAD_Z_HOMING)
+      // This routine moves to Z0 expecting the probe-homed frame (with the offset zeroed
+      // the nozzle is then above the bed). Home Z with the probe until it is done.
+      REMEMBER(pad_susp, pad_home_suspended, true);
+    #endif
     // Restore the previous calibration on every failure, without babystepping.
     REMEMBER(z_offset, probe.offset.z, 0.0f);
     succeeded = measure_z_offset(isNozzleClr, outOffset);
@@ -812,6 +820,11 @@ bool getZOffset(bool isNozzleClr, bool isRunProByPress, bool isRunProByTouch, fl
   }
   SERIAL_ECHOLNPGM("OUTPUT_ZOFFSET: ", *outOffset);
   probe.offset.z = *outOffset;
+  #if ENABLED(PAD_Z_HOMING)
+    // Back to the pad frame, so the mesh that follows is measured relative to the pad contact
+    RUN_AND_WAIT_GCODE_CMD("G28 Z", true);
+    if (!marlin.isRunning() || !motion.all_axes_trusted()) return false;
+  #endif
   return true;
 }
 
