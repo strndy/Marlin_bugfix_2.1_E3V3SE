@@ -329,15 +329,23 @@ Turning the knob to **Cancel**, clicking it while heating, `M108` from a host, o
 
 **Mesh workflow**
 
-- Probe off (printing): start G-code uses `G28` and no `G29`. `G28` re-enables the mesh stored in EEPROM; `M420 S1` after it does no harm. Leave **level calibration** off on the print confirmation page, because it probes.
+- Probe off (printing): start G-code uses `G28` and no `G29`. `G28` re-enables the mesh stored in EEPROM; `M420 S1` after it does no harm.
 - Probe on (new mesh): run **Leveling** from the LCD or `G28` then `G29`. You touch off once by hand, the probe measures the mesh, and it is saved. A wrong probe Z offset (`M851 Z`) shifts the whole mesh by that amount, so check that the centre values are close to 0 (`M420 V`).
-- Auto Z-offset (`M8015`), the first-boot wizard and level calibration need the probe and were not adapted.
+
+**Removed while the option is on** (they only make sense with a probed Z0):
+
+- Auto Z-offset: the **Start Auto Z-Offset** row is gone from the Leveling menu and `M8015` only prints `M8015 is not available with MANUAL_Z_HOMING`.
+- First-boot wizard: skipped entirely. A fresh EEPROM boots to the main menu in English; pick another language under **Control**.
+- **Level calibration** on the print confirmation page (also used by One Click Print): compiled out, so a print start cannot probe.
+
+The probe is now used only when you ask for it: **Start Bed Leveling** / `G29`, **Probe deploy** / **Probe stow** in the Move menu, and the probe G-codes (`G30`, `M48`, `M401`, `M402`, `M43`). Mesh view and edit, `M420` and Z-offset tuning during a print are unchanged. The LCD filament load/unload and custom-extrude entries still start with a full `G28`, so they ask for a touch-off.
 
 **Unverified risks**
 
 - Nothing here has run on hardware. A host test (`test/test_manual_z_homing.py`) covers the state machine only.
 - When Z is switched on again the rotor snaps to the nearest holding position: up to ±2 full steps, ±0.08 mm, and it differs from one homing to the next.
 - The Z driver's UART reads may not work on every board; the gantry may sink when released; the prompt may not restore every LCD screen correctly (it returns to the main menu when unsure).
+- The print confirmation page without **Level calibration** uses a layout the default build never shows.
 - A hot nozzle resting on PEI for minutes can mark the sheet. Do not walk away during the prompt; the timeout lifts the nozzle and turns the heater off.
 - `M84`, **Disable steppers** or a reset lose the Z reference, as with any homing.
 

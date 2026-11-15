@@ -620,6 +620,12 @@ static void Read_Boot_Step_Value()
 #endif
   // SERIAL_ECHOLNPGM(" HMI_flag.boot_step: ", HMI_flag.boot_step);
   // SERIAL_ECHOLNPGM(" HMI_flag.language: ", HMI_flag.language);
+  #if ENABLED(MANUAL_Z_HOMING)
+    // The wizard runs auto Z-offset and leveling with the probe. Never start it:
+    // go straight to the main menu (the stored step is left alone for other builds).
+    HMI_flag.boot_step = Boot_Step_Max;
+    if ((HMI_flag.language < Chinese) || (HMI_flag.language >= Language_Max)) HMI_flag.language = English;
+  #endif
   if (HMI_flag.boot_step != Boot_Step_Max)
   {
     HMI_flag.Need_boot_flag = true; // Requires booting
@@ -1580,6 +1586,21 @@ inline bool Apply_Encoder(const ENCODER_DiffState &encoder_diffState, T &valref)
 
 #define LEVEL_CASE_BEDVIS 4
 #define LEVEL_CASE_TOTAL (3 + ENABLED(BED_LEVEL_VISUALIZER))
+#define LEVEL_CASE_AUTOZ 1
+#define LEVEL_CASE_LEVELING 2
+#define LEVEL_CASE_EDIT 3
+#if ENABLED(MANUAL_Z_HOMING)
+  // No "Start Auto Z-Offset" row (it needs the probe): the other rows move up one
+  #undef LEVEL_CASE_AUTOZ
+  #undef LEVEL_CASE_LEVELING
+  #undef LEVEL_CASE_EDIT
+  #undef LEVEL_CASE_BEDVIS
+  #undef LEVEL_CASE_TOTAL
+  #define LEVEL_CASE_LEVELING 1
+  #define LEVEL_CASE_EDIT 2
+  #define LEVEL_CASE_BEDVIS 3
+  #define LEVEL_CASE_TOTAL (2 + ENABLED(BED_LEVEL_VISUALIZER))
+#endif
 
 #define TUNE_CASE_SPEED 1
 #define TUNE_CASE_TEMP (TUNE_CASE_SPEED + ENABLED(HAS_HOTEND))
@@ -6004,21 +6025,22 @@ void Draw_Level_Menu(){
   // Title
   Draw_Title(F("Leveling Menu"));
   
+#ifdef LEVEL_CASE_AUTOZ
   // There's no graphical asset for this label, so we just write it as string
-  DWIN_Draw_Label(MBASE(1), F("Start Auto Z-Offset"));
+  DWIN_Draw_Label(MBASE(LEVEL_CASE_AUTOZ), F("Start Auto Z-Offset"));
   // Menu Line with Extrusion Icon
-  Draw_Menu_Line(1, ICON_SetHome);
-  
+  Draw_Menu_Line(LEVEL_CASE_AUTOZ, ICON_SetHome);
+#endif
 
   // There's no graphical asset for this label, so we just write it as string
-  DWIN_Draw_Label(MBASE(2), F("Start Bed Leveling"));
+  DWIN_Draw_Label(MBASE(LEVEL_CASE_LEVELING), F("Start Bed Leveling"));
   // Menu Line with Extrusion Icon
-  Draw_Menu_Line(2, ICON_Edit_Level_Data); 
+  Draw_Menu_Line(LEVEL_CASE_LEVELING, ICON_Edit_Level_Data); 
 
   // Show Edit Level Data Icon
-  DWIN_ICON_Show(HMI_flag.language, LANGUAGE_EDIT_LEVEL_DATA, 42, MBASE(3) + JPN_OFFSET);
+  DWIN_ICON_Show(HMI_flag.language, LANGUAGE_EDIT_LEVEL_DATA, 42, MBASE(LEVEL_CASE_EDIT) + JPN_OFFSET);
   // Draw Menu Line for Edit Level Data Icon
-  Draw_Menu_Line(3, ICON_Edit_Level_Data);
+  Draw_Menu_Line(LEVEL_CASE_EDIT, ICON_Edit_Level_Data);
 #if ENABLED(BED_LEVEL_VISUALIZER)
   Item_Level_BedVisualizer(LEVEL_CASE_BEDVIS);
 #endif
@@ -6051,17 +6073,19 @@ void HMI_Level_Menu(){
         select_cextr.reset();
         Goto_MainMenu();
         break;
-      case 1: // Start Auto Z-Offset
+#ifdef LEVEL_CASE_AUTOZ
+      case LEVEL_CASE_AUTOZ: // Start Auto Z-Offset
         Popup_Window_Home();
         gcode.process_subcommands_now(F("M8015 S0"));
         break;
-      case 2: // Start Bed Leveling
+#endif
+      case LEVEL_CASE_LEVELING: // Start Bed Leveling
         Popup_Window_Home();
         RUN_AND_WAIT_GCODE_CMD("G28", true); // Home all axes
         HMI_flag.leveling_offset_flag = false; //Disable Offset Flag
         HMI_flag.Pressure_Height_end = true; // Enable Leveling Flag
         break;
-      case 3: // Edit Level Data
+      case LEVEL_CASE_EDIT: // Edit Level Data
         checkkey = Leveling;
         HMI_flag.G29_finish_flag = true;
         HMI_flag.Edit_Only_flag = true;
@@ -7066,6 +7090,12 @@ void HMI_Confirm()
     return;
   if (encoder_diffState == ENCODER_DIFF_ENTER)
   {
+    #if ENABLED(MANUAL_Z_HOMING)
+      // Every branch below starts the probe-based auto Z-offset. Not with manual Z homing.
+      select_page.set(0);
+      Goto_MainMenu();
+      return;
+    #endif
     if (Set_language == HMI_flag.boot_step)
     {
 

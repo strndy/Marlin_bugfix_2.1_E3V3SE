@@ -552,6 +552,43 @@ int main() {
                         "-DBED_LEVEL_VISUALIZER=0", "-DGRID_MAX_POINTS_X=6", "-DGRID_MAX_POINTS_Y=6",
                         "-I", str(LCD), str(cpp), "-o", str(binary)], check=True)
         subprocess.run([str(binary)], check=True)
+        # MANUAL_Z_HOMING drops the probe-only "Start Auto Z-Offset" row. Use the real
+        # row definitions: the remaining rows move up one, the bounds shrink with them
+        # and the map row is still entered and left through the real handlers.
+        first = dwin.index('#define LEVEL_CASE_BEDVIS')
+        manual_defines = dwin[first:dwin.index('#endif', first) + 6] + '\n'
+        assert '#if ENABLED(MANUAL_Z_HOMING)' in manual_defines
+        cpp.write_text(STUBS + manual_defines + implementation + menu + handler + TESTS)
+        subprocess.run(["g++", "-std=c++17", "-O1", "-Wall", "-Wextra", "-Werror", "-Wno-unused-variable", "-DMANUAL_Z_HOMING=1",  # gcode stub: no M8015 call left
+                       
+                        "-DGRID_MAX_POINTS_X=6", "-DGRID_MAX_POINTS_Y=6", "-DBED_LEVEL_VISUALIZER_DRAW_DELAY_MS=10",
+                        "-I", str(LCD), str(cpp), "-o", str(binary)], check=True)
+        subprocess.run([str(binary)], check=True, capture_output=True)
+        manual = r'''
+int main() {
+ static_assert(LEVEL_CASE_LEVELING==1 && LEVEL_CASE_EDIT==2 && LEVEL_CASE_TOTAL==2);
+ Draw_Level_Menu();
+ bool leveling_row=false;
+ for(const auto &op:ops) {
+  assert(op.text!="Bed Level Map" && op.text!="Start Auto Z-Offset");
+  leveling_row |= op.text=="Start Bed Leveling";
+ }
+ assert(back_selected && leveling_row);
+ event=ENCODER_DIFF_CW;
+ for(int n=0;n<10;++n) HMI_Level_Menu();
+ assert(select_cextr.now==2 && highlighted_row==2);
+ event=ENCODER_DIFF_CCW;
+ for(int n=0;n<10;++n) HMI_Level_Menu();
+ assert(select_cextr.now==0);
+ std::cout<<"PASS Leveling menu with MANUAL_Z_HOMING: no auto Z-offset row, bounds follow\n";
+}
+'''
+        cpp.write_text(STUBS + manual_defines + menu + manual)
+        subprocess.run(["g++", "-std=c++17", "-O1", "-Wall", "-Wextra", "-Werror", "-Wno-unused-variable", "-DMANUAL_Z_HOMING=1",  # gcode stub: no M8015 call left
+                       
+                        "-DBED_LEVEL_VISUALIZER=0", "-DGRID_MAX_POINTS_X=6", "-DGRID_MAX_POINTS_Y=6",
+                        "-I", str(LCD), str(cpp), "-o", str(binary)], check=True)
+        subprocess.run([str(binary)], check=True)
     if args.preview_dir:
         previews(args.preview_dir)
         print(f"Preview: {args.preview_dir / 'bed-level-visualizer.svg'}")

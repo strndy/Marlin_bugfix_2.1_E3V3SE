@@ -75,6 +75,12 @@
 
 #endif
 enum Auto_Hight_Stage:uint8_t{Nozz_Start,Nozz_Hot,Nozz_Clear,Nozz_Hight,Nozz_Finish};  //The four stages of one-click high-definition
+#if ENABLED(MANUAL_Z_HOMING)
+  // "Level calibration" before a print probes the bed corners. With manual Z homing the
+  // probe may be unclipped, so the option, its toggle and G29_small() are compiled out.
+  #undef USER_LEVEL_CHECK
+#endif
+
 enum processID : uint8_t {
   // Process ID
   MainMenu,

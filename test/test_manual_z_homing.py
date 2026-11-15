@@ -6,6 +6,7 @@ Z is only marked homed after a knob confirmation, the nozzle heater is off after
 every failure, and the Z driver is never left switched off.
 """
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 
@@ -290,9 +291,109 @@ HEADERS = ('inc/MarlinConfig.h', 'inc/MarlinConfigPre.h', 'MarlinCore.h', 'gcode
            'sd/cardreader.h', 'feature/host_actions.h')
 
 
+PROBE_FREE = r'''
+#include <cassert>
+#include <cstdint>
+#include <cstdlib>
+#include <cstdio>
+#include <string>
+#include <vector>
+#include "Marlin/src/core/macros.h"
+#define MANUAL_Z_HOMING
+#define EEPROM_SETTINGS
+#define IIC_BL24CXX_EEPROM
+#define USE_AUTOZ_TOOL_2
+#define USER_LEVEL_CHECK 1
+#define PSTR(S) S
+#define DWIN_BOOT_STEP_EEPROM_ADDRESS 1
+#define DWIN_LANGUAGE_EEPROM_ADDRESS 2
+
+// --- the real USER_LEVEL_CHECK override from dwin.h
+@LEVEL_CHECK@
+#if ENABLED(USER_LEVEL_CHECK)
+  #error "Level calibration must be compiled out with MANUAL_Z_HOMING"
+#endif
+
+std::vector<std::string> lines;
+#define SERIAL_ECHOLNPGM(S) lines.push_back(S)
+// Anything that would move the printer or write the wizard state ends the test
+[[noreturn]] static void forbidden(const char *what) { printf("FAIL reached %s\n", what); abort(); }
+
+enum DC_Boot_Step { Set_language, Set_high, Set_levelling, Boot_Step_Max };
+enum { Chinese = 2, English = 4, Language_Max = 12 };
+enum { MainMenu, ONE_HIGH, POPUP_CONFIRM };
+enum { Nozz_Start };
+enum ENCODER_DiffState { ENCODER_DIFF_NO, ENCODER_DIFF_CW, ENCODER_DIFF_CCW, ENCODER_DIFF_ENTER };
+struct { uint8_t boot_step, language; bool Need_boot_flag; } HMI_flag;
+uint8_t checkkey = POPUP_CONFIRM, stored_step, stored_language;
+int start_frames, main_menus;
+struct BL24CXX { static void read(int address, uint8_t *v, size_t) { *v = address == DWIN_BOOT_STEP_EEPROM_ADDRESS ? stored_step : stored_language; } };
+void HMI_StartFrame(bool) { ++start_frames; }
+void Goto_MainMenu() { ++main_menus; checkkey = MainMenu; }
+void Save_Boot_Step_Value() { forbidden("Save_Boot_Step_Value"); }
+void Popup_Window_Height(int) { forbidden("the auto Z-offset page"); }
+struct { void inject_P(const char *c) { forbidden(c); } } queue;
+struct { void set(int) {} } select_page;
+ENCODER_DiffState get_encoder_state() { return ENCODER_DIFF_ENTER; }
+struct GcodeSuite { void M8015(); };
+
+@FUNCTIONS@
+
+int main() {
+  // M8015 compiles with no probe, motion or settings code at all and only reports
+  GcodeSuite().M8015();
+  assert(lines.size() == 1 && lines[0] == "M8015 is not available with MANUAL_Z_HOMING");
+
+  // Fresh, half-finished and finished wizard states all boot straight to the main menu
+  for (int step : { 0xFF, int(Set_language), int(Set_high), int(Set_levelling), int(Boot_Step_Max) })
+    for (int language : { 0xFF, 0, int(English), 7 }) {
+      stored_step = step; stored_language = language; start_frames = 0;
+      HMI_flag.Need_boot_flag = true;
+      Read_Boot_Step_Value();
+      assert(!HMI_flag.Need_boot_flag && start_frames == 1);
+      assert(HMI_flag.language >= Chinese && HMI_flag.language < Language_Max);
+      assert(HMI_flag.language == (language == 7 ? 7 : int(English)));
+
+      // A leftover confirmation popup can only lead back to the main menu
+      checkkey = POPUP_CONFIRM; main_menus = 0;
+      HMI_Confirm();
+      assert(main_menus == 1 && checkkey == MainMenu);
+    }
+  puts("PASS probe-free with MANUAL_Z_HOMING: M8015 inert, wizard skipped, level calibration compiled out");
+  return 0;
+}
+'''
+
+
+def function(source, prefix):
+    """Return one function, with its preprocessor lines, by matching braces."""
+    source = re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S)
+    start = source.index(prefix)
+    end, depth = source.index('{', start) + 1, 1
+    while depth:
+        depth += (source[end] == '{') - (source[end] == '}')
+        end += 1
+    return source[start:end] + '\n'
+
+
+def probe_free(tmp):
+    dwin = (ROOT/'Marlin/src/lcd/dwin/creality/dwin.cpp').read_text()
+    header = (ROOT/'Marlin/src/lcd/dwin/creality/dwin.h').read_text()
+    first = header.index('#if ENABLED(MANUAL_Z_HOMING)')
+    level_check = header[first:header.index('#endif', first) + 6]
+    assert '#undef USER_LEVEL_CHECK' in level_check and first < header.index('enum processID')
+    functions = function((ROOT/'Marlin/src/e3v3se/M8015.cpp').read_text(), 'void GcodeSuite::M8015(')
+    functions += function(dwin, 'static void Read_Boot_Step_Value(') + function(dwin, 'void HMI_Confirm(')
+    (tmp/'probe_free.cpp').write_text(PROBE_FREE.replace('@LEVEL_CHECK@', level_check).replace('@FUNCTIONS@', functions))
+    exe = tmp/'probe_free'
+    subprocess.run(['g++', '-std=c++17', '-Wall', '-Wno-unused-function', '-I', str(ROOT), str(tmp/'probe_free.cpp'), '-o', str(exe)], check=True)
+    subprocess.run([str(exe)], check=True)
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix='manual-z-') as folder:
         tmp = Path(folder)
+        probe_free(tmp)
         for name in HEADERS:
             path = tmp/'src'/name
             path.parent.mkdir(parents=True, exist_ok=True)
