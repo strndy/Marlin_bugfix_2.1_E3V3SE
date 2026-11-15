@@ -30,10 +30,10 @@ private:
 extern ManualZHome manual_z;
 
 // Implemented by the Creality DWIN UI (lcd/dwin/creality/dwin.cpp)
-enum ManualZScreen : uint8_t { MZS_HEATING, MZS_TOUCH, MZS_FAILED };
+enum ManualZScreen : uint8_t { MZS_HEATING, MZS_TOUCH, MZS_LIFT, MZS_FAILED };
 enum ManualZReply  : uint8_t { MZR_NONE, MZR_CONFIRM, MZR_CANCEL };
 void DWIN_ManualZ_Show(const ManualZScreen screen, FSTR_P const reason=nullptr);
-ManualZReply DWIN_ManualZ_Reply();
+ManualZReply DWIN_ManualZ_Reply();  // MZR_CANCEL as well if another screen took over the display
 void DWIN_ManualZ_End(const bool ok);
 
 #endif // MANUAL_Z_HOMING

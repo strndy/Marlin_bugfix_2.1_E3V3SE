@@ -11367,6 +11367,11 @@ void HMI_Boot_Set() // Boot settings
         DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 8, 197, F("3. Click the knob"));
         Draw_ManualZ_Options();
         break;
+      case MZS_LIFT:
+        DWIN_Draw_String(false, false, font8x16, Color_Red, Color_Bg_Black, 12, 132, F("HANDS OFF THE Z SCREW"));
+        DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 8, 160, F("Z motor is on again."));
+        DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 8, 175, F("Z lifts 5 mm in 2 seconds."));
+        break;
       case MZS_FAILED:
         DWIN_Draw_String(false, false, font8x16, Color_Red, Color_Bg_Black, 12, 132, F("Z is NOT homed"));
         if (reason) DWIN_Draw_String(false, false, font6x12, Color_Yellow, Color_Bg_Black, 8, 160, reason);
@@ -11377,12 +11382,14 @@ void HMI_Boot_Set() // Boot settings
     Draw_Mid_Status_Area(true);
     DWIN_UpdateLCD();
     #if PIN_EXISTS(BEEPER)
-      if (screen != MZS_HEATING)        // Attention: the user has to act (or homing failed)
+      if (screen != MZS_HEATING)        // Attention: act now, Z is about to move, or homing failed
         for (uint8_t i = 0; i < 2; ++i) { WRITE(BEEPER_PIN, HIGH); delay(80); WRITE(BEEPER_PIN, LOW); delay(80); }
     #endif
   }
 
   ManualZReply DWIN_ManualZ_Reply() {
+    // Another screen took the display and the knob (e.g. SD card removed): the prompt can't be answered
+    if (checkkey != ManualZPrompt) return MZR_CANCEL;
     const ManualZReply reply = mz_reply;
     mz_reply = MZR_NONE;
     return reply;
@@ -11430,7 +11437,7 @@ void HMI_Boot_Set() // Boot settings
       }
     }
     const ENCODER_DiffState state = get_encoder_state();
-    if (state == ENCODER_DIFF_NO || mz_screen == MZS_FAILED || PENDING(ms, mz_input_ms)) return;
+    if (state == ENCODER_DIFF_NO || mz_screen > MZS_TOUCH || PENDING(ms, mz_input_ms)) return;
     if (state == ENCODER_DIFF_ENTER)
       mz_reply = (mz_screen == MZS_TOUCH && !mz_cancel_selected) ? MZR_CONFIRM : MZR_CANCEL;
     else if (mz_screen == MZS_TOUCH) {
@@ -11957,7 +11964,7 @@ void EachMomentUpdate()
 
     #if ENABLED(OCTOPRINT_PLUGIN)
       // Update LCD when using OctoPrint
-      if (serial_connection_active && OctoRefresh && TERN1(ADVANCED_PAUSE_FEATURE, checkkey != AdvancedPause))
+      if (serial_connection_active && OctoRefresh && TERN1(ADVANCED_PAUSE_FEATURE, checkkey != AdvancedPause) && TERN1(MANUAL_Z_HOMING, checkkey != ManualZPrompt))
         DWIN_OctoUpdate();
     #endif
 

@@ -24,13 +24,8 @@ CONFIG = r'''
 
 #define MANUAL_Z_HOMING
 #define MANUAL_Z_HOME_TEMP        220
-#define MANUAL_Z_HOME_X_POINT     110
-#define MANUAL_Z_HOME_Y_POINT     110
-#define MANUAL_Z_HOME_RETRACT     1.0
-#define MANUAL_Z_HOME_OFFSET      0.0
-#define MANUAL_Z_HOME_CLEARANCE   5
-#define MANUAL_Z_HOME_TIMEOUT_SEC 600
-#define MANUAL_Z_HOME_VERIFY_UART
+#define X_CENTER 110
+#define Y_CENTER 110
 #define DWIN_CREALITY_LCD
 #define HOST_ACTION_COMMANDS
 #define ACTION_ON_CANCEL "cancel"
@@ -41,10 +36,6 @@ CONFIG = r'''
 #define Z_HOME_TO_MIN 1
 #define AXIS_HAS_UART(A) 1
 #define HEATER_0_MAXTEMP 310
-#define X_MIN_POS 0
-#define X_MAX_POS 220
-#define Y_MIN_POS 0
-#define Y_MAX_POS 220
 
 using millis_t = uint32_t;
 using FSTR_P = const char*;
@@ -75,12 +66,15 @@ struct Sim {
   int target = 0, temp = 25;
   bool xy_homed = true, z_homed = false, z_trusted = false, heating_flag = true;
   bool endstops_on = true, sd_printing = false, abort_sd = false, job = false;
-  uint8_t toff = 3;
-  bool uart_ok = true;
+  uint32_t chopconf = 0x10000053;    // Driver register as configured at boot (TOFF=3)
+  bool uart_ok = true, uart_corrupt_write = false;
+  uint8_t toff() const { return chopconf & 0x0F; }
   float real_z = 12;                 // True nozzle height above the bed
   float lowest_powered_move = 1e9f;  // Lowest logical Z target commanded while Z is unknown
   // Observations
   int toff_zero_writes = 0, e_moves = 0, host_cancels = 0, ui_end = -1;
+  millis_t hands_off_from = 0;       // When the "hands off" screen was shown
+  bool lift_warned = false;          // A powered Z move after the prompt came >= 2 s after the warning
   std::vector<int> screens;
   bool killed = false, moved_xy = false, moved_with_driver_off = false;
   // Script
@@ -91,16 +85,18 @@ extern Sim sim;
 
 struct StepperZ {
   bool CRCerror = false;
-  uint32_t CHOPCONF() { CRCerror = !sim.uart_ok; return sim.uart_ok ? (0x10000050u | sim.toff) : 0; }
-  void toff(const uint8_t v) { if (v == 0) ++sim.toff_zero_writes; sim.toff = v; }
+  uint32_t CHOPCONF() { CRCerror = !sim.uart_ok; return sim.uart_ok ? sim.chopconf : 0; }
+  void CHOPCONF(const uint32_t v) {
+    if (!(v & 0x0F)) ++sim.toff_zero_writes;
+    sim.chopconf = sim.uart_corrupt_write ? (v ^ 0x00010000u) : v;  // e.g. a flipped MRES bit
+  }
 };
 extern StepperZ stepperZ;
-struct chopper_timing_t { uint8_t toff; int8_t hend; uint8_t hstrt; };
-static constexpr chopper_timing_t chopper_timing_Z = { 3, -1, 1 };
 
 struct Marlin {
   void idle(bool no_sleep) { if (!no_sleep) throw std::logic_error("idle() may release steppers"); now_ms += 100; if (sim.on_idle) sim.on_idle(sim); }
   void heatup_start() { sim.heating_flag = true; }
+  void heatup_done() { sim.heating_flag = false; }
   bool is_heating() { return sim.heating_flag; }
   bool printJobOngoing() { return sim.job; }
   void kill(FSTR_P) { sim.killed = true; sim.target = 0; throw std::runtime_error("kill"); }
@@ -124,7 +120,8 @@ struct Motion {
   feedRate_t homing_feedrate(AxisEnum) { return 10; }
   void blocking_move(const xy_pos_t &p, feedRate_t) { position.x = p.x; position.y = p.y; sim.moved_xy = true; }
   void blocking_move_z(float z, feedRate_t) {
-    if (sim.toff == 0) sim.moved_with_driver_off = true;
+    if (sim.toff() == 0) sim.moved_with_driver_off = true;
+    sim.lift_warned = sim.hands_off_from && now_ms - sim.hands_off_from >= 2000;
     if (!sim.z_homed && z < sim.lowest_powered_move) sim.lowest_powered_move = z;
     sim.real_z += z - position.z; position.z = z;
   }
@@ -156,7 +153,7 @@ millis_t now_ms = 4294900000u;       // The 32-bit millis() wrap happens during 
 Sim sim; StepperZ stepperZ; Marlin marlin; Thermal thermalManager; Motion motion;
 Planner planner; Endstops endstops; Card card; HostUI hostui;
 
-void DWIN_ManualZ_Show(const ManualZScreen s, FSTR_P) { sim.screens.push_back(s); }
+void DWIN_ManualZ_Show(const ManualZScreen s, FSTR_P) { sim.screens.push_back(s); if (s == MZS_LIFT) sim.hands_off_from = now_ms; }
 ManualZReply DWIN_ManualZ_Reply() { const int r = sim.reply; sim.reply = 0; return ManualZReply(r); }
 void DWIN_ManualZ_End(const bool ok) { sim.ui_end = ok; }
 
@@ -177,8 +174,9 @@ static bool run() {
 }
 
 static void check_failed(const char *name) {
-  if (!(sim.target == 0 && !sim.z_homed && !sim.z_trusted && manual_z.locked && sim.toff == 3 && !sim.moved_with_driver_off)) {
-    printf("FAIL %s: target=%d homed=%d locked=%d toff=%d\n", name, sim.target, sim.z_homed, manual_z.locked, sim.toff);
+  if (!(sim.target == 0 && !sim.z_homed && !sim.z_trusted && manual_z.locked && sim.chopconf == 0x10000053u && !sim.moved_with_driver_off
+         && (sim.toff_zero_writes == 0 || sim.lift_warned))) {
+    printf("FAIL %s: target=%d homed=%d locked=%d chopconf=%x\n", name, sim.target, sim.z_homed, manual_z.locked, unsigned(sim.chopconf));
     for (auto &l : serial_log) printf("  %s\n", l.c_str());
     assert(false);
   }
@@ -190,30 +188,32 @@ int main() {
   sim.on_idle = [](Sim &s) {
     physics(s);
     static int ticks = 0;
-    if (s.toff == 0) { s.real_z = 0; if (++ticks == 50) s.reply = MZR_CONFIRM; }
+    if (s.toff() == 0) { s.real_z = 0; if (++ticks == 50) s.reply = MZR_CONFIRM; }
   };
   if (!run()) { for (auto &l : serial_log) printf("  %s\n", l.c_str()); assert(false); }
   assert(sim.z_homed && sim.z_trusted && !manual_z.locked);
-  assert(sim.toff == 3 && sim.toff_zero_writes == 1 && !sim.moved_with_driver_off);
+  assert(sim.chopconf == 0x10000053u && sim.toff_zero_writes == 1 && !sim.moved_with_driver_off);
+  assert(sim.lift_warned);                             // Hands-off screen, then >= 2 s, then the lift
   assert(motion.position.z == 5 && sim.real_z == 5);   // Logical Z matches the real height
   assert(sim.target == 200);                           // Previous target restored
   assert(sim.e_moves == 1 && motion.position.e == 7);  // Retracted, logical E unchanged
   assert(sim.moved_xy && !sim.endstops_on && sim.ui_end == 1);
-  assert(sim.screens == (std::vector<int>{ MZS_HEATING, MZS_TOUCH }));
+  assert(sim.screens == (std::vector<int>{ MZS_HEATING, MZS_TOUCH, MZS_LIFT }));
+  assert(motion.position.e == 7 && !serial_log.empty());
 
   // 2. Nozzle was off before G28: it is off again afterwards
   reset(0);
-  sim.on_idle = [](Sim &s) { physics(s); if (s.toff == 0) { s.real_z = 0; s.reply = MZR_CONFIRM; } };
+  sim.on_idle = [](Sim &s) { physics(s); if (s.toff() == 0) { s.real_z = 0; s.reply = MZR_CONFIRM; } };
   assert(run() && sim.target == 0 && sim.z_homed);
 
   // 3. Nobody clicks: timeout with the nozzle resting on the bed
   reset(210);
   sim.sd_printing = true;
-  sim.on_idle = [](Sim &s) { physics(s); if (s.toff == 0) s.real_z = 0; };
+  sim.on_idle = [](Sim &s) { physics(s); if (s.toff() == 0) s.real_z = 0; };
   const millis_t t0 = now_ms;
   assert(!run());
   check_failed("timeout");
-  assert(now_ms - t0 > 600000u && now_ms - t0 < 700000u);
+  assert(now_ms - t0 > 300000u && now_ms - t0 < 400000u);
   assert(sim.real_z == 5 && sim.ui_end == 0 && sim.host_cancels == 0);
   assert(sim.screens.back() == MZS_FAILED);
 
@@ -226,7 +226,7 @@ int main() {
 
   // 5. Cancel selected on the touch screen, with Z only partly lowered
   reset(0);
-  sim.on_idle = [](Sim &s) { physics(s); if (s.toff == 0) { s.real_z = 3; s.reply = MZR_CANCEL; } };
+  sim.on_idle = [](Sim &s) { physics(s); if (s.toff() == 0) { s.real_z = 3; s.reply = MZR_CANCEL; } };
   assert(!run());
   check_failed("cancel at touch");
   assert(sim.real_z >= motion.position.z);             // Real nozzle is never below the logical Z
@@ -234,7 +234,7 @@ int main() {
   // 6. M108 from a host during the touch-off, host print job running
   reset(0);
   sim.job = true;
-  sim.on_idle = [](Sim &s) { physics(s); if (s.toff == 0) s.heating_flag = false; };
+  sim.on_idle = [](Sim &s) { physics(s); if (s.toff() == 0) s.heating_flag = false; };
   assert(!run());
   check_failed("M108");
   assert(sim.host_cancels == 1 && serial_log.back().rfind("Error:", 0) == 0);
@@ -263,10 +263,26 @@ int main() {
 
   // 10. UART dies while Z is released: re-enable can't be confirmed -> halt
   reset(0);
-  sim.on_idle = [](Sim &s) { physics(s); if (s.toff == 0) { s.uart_ok = false; s.reply = MZR_CONFIRM; } };
+  sim.on_idle = [](Sim &s) { physics(s); if (s.toff() == 0) { s.uart_ok = false; s.reply = MZR_CONFIRM; } };
   assert(!run());
   assert(sim.killed && sim.target == 0 && !sim.z_homed && manual_z.locked && !sim.moved_with_driver_off);
-  assert(sim.toff == 3);                               // The enable write itself was still sent
+  assert(sim.chopconf == 0x10000053u);                 // The enable write itself was still sent
+
+  // 10b. The re-enable write lands but reads back different (other CHOPCONF bits changed) -> halt
+  reset(0);
+  sim.on_idle = [](Sim &s) { physics(s); if (s.toff() == 0) { s.uart_corrupt_write = true; s.reply = MZR_CONFIRM; } };
+  assert(!run());
+  assert(sim.killed && !sim.z_homed && manual_z.locked && !sim.moved_with_driver_off);
+
+  // 10c. Driver answers but TOFF is already 0 (driver off): fail without writing
+  reset(0);
+  sim.chopconf = 0x10000050u;
+  sim.on_idle = physics;
+  assert(!run());
+  assert(sim.toff_zero_writes == 0 && !sim.killed && sim.target == 0 && manual_z.locked && !sim.z_homed);
+
+  // 10d. A previous G28 left the heat-up flag set? No: every exit clears it (M155 reports keep working)
+  assert(!marlin.is_heating());
 
   // 11. X/Y not homed
   reset(0);
@@ -278,10 +294,10 @@ int main() {
 
   // 12. A later successful home clears the lock
   sim.xy_homed = true;
-  sim.on_idle = [](Sim &s) { physics(s); if (s.toff == 0) { s.real_z = 0; s.reply = MZR_CONFIRM; } };
-  assert(run() && !manual_z.locked && sim.z_homed);
+  sim.on_idle = [](Sim &s) { physics(s); if (s.toff() == 0) { s.real_z = 0; s.reply = MZR_CONFIRM; } };
+  assert(run() && !manual_z.locked && sim.z_homed && !marlin.is_heating());
 
-  puts("PASS manual Z homing: confirm, restore, timeout, cancel, M108, SD abort, UART faults, lock");
+  puts("PASS manual Z homing: confirm, restore, hands-off delay, timeout, cancel, M108, SD abort, UART faults, lock");
   return 0;
 }
 '''

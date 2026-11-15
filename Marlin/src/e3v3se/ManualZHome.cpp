@@ -25,6 +25,8 @@
   #error "MANUAL_Z_HOMING requires DWIN_CREALITY_LCD (the prompt is drawn by the Creality DWIN UI)."
 #elif !AXIS_HAS_UART(Z)
   #error "MANUAL_Z_HOMING requires a TMC UART driver on Z. The enable pin is shared, so Z can only be released over UART."
+#elif ENABLED(SOFTWARE_DRIVER_ENABLE)
+  #error "MANUAL_Z_HOMING can't be used with SOFTWARE_DRIVER_ENABLE (it would switch Z back on while it is turned by hand)."
 #elif !HAS_HOTEND || !HAS_EXTRUDERS
   #error "MANUAL_Z_HOMING requires a hotend and an extruder."
 #elif ANY(DELTA, AXEL_TPARA, HOME_Z_FIRST, FOAMCUTTER_XYUV) || !Z_HOME_TO_MIN
@@ -32,14 +34,12 @@
 #endif
 
 static_assert(MANUAL_Z_HOME_TEMP == 0 || (MANUAL_Z_HOME_TEMP >= 100 && MANUAL_Z_HOME_TEMP <= (HEATER_0_MAXTEMP) - 15), "MANUAL_Z_HOME_TEMP must be 0 (no heating) or 100..(HEATER_0_MAXTEMP - 15).");
-static_assert(WITHIN(MANUAL_Z_HOME_X_POINT, X_MIN_POS, X_MAX_POS) && WITHIN(MANUAL_Z_HOME_Y_POINT, Y_MIN_POS, Y_MAX_POS), "MANUAL_Z_HOME_X/Y_POINT must be reachable by the nozzle.");
-static_assert(WITHIN(MANUAL_Z_HOME_RETRACT, 0, 10), "MANUAL_Z_HOME_RETRACT must be 0..10 mm.");
-static_assert(WITHIN(MANUAL_Z_HOME_OFFSET, -2, 2), "MANUAL_Z_HOME_OFFSET must be -2..2 mm.");
-static_assert(WITHIN(MANUAL_Z_HOME_CLEARANCE, 1, 50) && (MANUAL_Z_HOME_CLEARANCE) > (MANUAL_Z_HOME_OFFSET), "MANUAL_Z_HOME_CLEARANCE must be 1..50 mm and above MANUAL_Z_HOME_OFFSET.");
-static_assert(WITHIN(MANUAL_Z_HOME_TIMEOUT_SEC, 30, 3600), "MANUAL_Z_HOME_TIMEOUT_SEC must be 30..3600.");
 
-constexpr int16_t touch_temp = MANUAL_Z_HOME_TEMP;       // 0 = touch off cold
-constexpr float touch_retract = MANUAL_Z_HOME_RETRACT;
+constexpr int16_t touch_temp = MANUAL_Z_HOME_TEMP;  // 0 = touch off cold
+constexpr float touch_retract = 1.0f,               // (mm) Pulled back before the touch-off, not restored
+                lift_z = 5.0f;                      // (mm) Height after the touch-off (relative on failure)
+constexpr millis_t wait_limit_ms = SEC_TO_MS(300),  // Limit for heating and for the click
+                   hands_off_ms = 2000;             // Warning before Z moves under power after the prompt
 
 ManualZHome manual_z;
 
@@ -47,56 +47,59 @@ bool ManualZHome::locked; // = false
 int16_t ManualZHome::saved_target = -1;
 
 //
-// Z driver output stage. X/Y/Z/E share one enable pin on this board, so the only way
-// to free Z alone is TOFF=0 in the Z driver's CHOPCONF (all bridges off, motor freewheels).
+// Z driver output stage. X/Y/Z/E share one enable pin on this board, so the only way to free
+// Z alone is TOFF=0 in the Z driver's CHOPCONF (all bridges off, the motor freewheels).
+// Whole register values are written and every write is read back over UART.
 //
-static bool z_toff_is(const uint8_t want) {
-  #if ENABLED(MANUAL_Z_HOME_VERIFY_UART)
-    const uint32_t chopconf = stepperZ.CHOPCONF();  // A missing or corrupt reply sets CRCerror
-    return !stepperZ.CRCerror && (chopconf & 0x0F) == want;
-  #else
-    UNUSED(want);
-    return true;
-  #endif
+static bool z_chopconf_is(const uint32_t want) {
+  const uint32_t chopconf = stepperZ.CHOPCONF();  // A missing or corrupt reply sets CRCerror
+  return !stepperZ.CRCerror && chopconf == want;
 }
 
-static bool z_set_toff(const uint8_t toff) {
+static bool z_write_chopconf(const uint32_t value) {
   for (uint8_t tries = 3; tries--;) {
-    stepperZ.toff(toff);
-    safe_delay(20);
-    if (z_toff_is(toff)) return true;
+    stepperZ.CHOPCONF(value);
+    if (z_chopconf_is(value)) return true;
   }
   return false;
 }
-
-static inline bool z_driver_responds() { return z_toff_is(chopper_timing_Z.toff); }
-static inline bool z_driver_release()  { return z_set_toff(0); }
-static inline bool z_driver_engage()   { return z_set_toff(chopper_timing_Z.toff); }
 
 enum ManualZFail : uint8_t { MZF_NONE, MZF_XY, MZF_TIMEOUT, MZF_CANCEL, MZF_HOST, MZF_DRIVER, MZF_ENGAGE };
 
 // Wait for the knob while keeping heaters, watchdog, UI and serial serviced.
 // X/Y stay energised: idle(true) holds off the stepper idle timeout.
 static ManualZFail wait_for_knob(const bool heating) {
-  const millis_t timeout_ms = millis() + SEC_TO_MS(MANUAL_Z_HOME_TIMEOUT_SEC);
-  millis_t next_report_ms = 0;
-  marlin.heatup_start();                // M108 (emergency parser) clears this and aborts
+  const millis_t timeout_ms = millis() + wait_limit_ms;
+  millis_t next_report_ms = millis();
+  ManualZFail result;
+  marlin.heatup_start();                // M108 (emergency parser) clears this
   for (;;) {
     marlin.idle(true);
     const millis_t ms = millis();
     if (heating) {
-      if (thermalManager.wholeDegHotend(0) >= touch_temp - 2) return MZF_NONE;
+      if (thermalManager.wholeDegHotend(0) >= touch_temp - 2) { result = MZF_NONE; break; }
       if (ELAPSED(ms, next_report_ms)) {
         next_report_ms = ms + 5000UL;
         SERIAL_ECHOLNPGM("MANUAL_Z: heating ", thermalManager.wholeDegHotend(0), "/", touch_temp);
       }
     }
     const ManualZReply reply = DWIN_ManualZ_Reply();
-    if (!heating && reply == MZR_CONFIRM) return MZF_NONE;
-    if (reply == MZR_CANCEL) return MZF_CANCEL;
-    if (!marlin.is_heating() || card.flag.abort_sd_printing) return MZF_HOST;  // M108 / M524
-    if (ELAPSED(ms, timeout_ms)) return MZF_TIMEOUT;
+    if (!heating && reply == MZR_CONFIRM) { result = MZF_NONE; break; }
+    if (reply == MZR_CANCEL) { result = MZF_CANCEL; break; }
+    if (!marlin.is_heating() || card.flag.abort_sd_printing) { result = MZF_HOST; break; }  // M108 / M524
+    if (ELAPSED(ms, timeout_ms)) { result = MZF_TIMEOUT; break; }
   }
+  marlin.heatup_done();                 // Left set, it would silence M155 temperature reports
+  return result;
+}
+
+// Z holds again, but a hand may still be on the coupler: warn, wait, then lift
+static void lift_after_touch(const float z) {
+  DWIN_ManualZ_Show(MZS_LIFT);          // "Hands off" and a beep
+  SERIAL_ECHOLNPGM("MANUAL_Z: hands off, Z lifts in 2 s");
+  for (const millis_t end_ms = millis() + hands_off_ms; PENDING(millis(), end_ms);) marlin.idle(true);
+  motion.blocking_move_z(z, motion.homing_feedrate(Z_AXIS));
+  planner.synchronize();
 }
 
 void ManualZHome::preheat() {
@@ -109,7 +112,8 @@ void ManualZHome::preheat() {
 
 bool ManualZHome::home(const bool move_xy) {
   ManualZFail fail = MZF_NONE;
-  bool released = false, engaged = true;
+  bool released = false;
+  uint32_t chopconf_on = 0;
 
   const int16_t restore_target = saved_target < 0 ? thermalManager.degTargetHotend(0) : saved_target;
   saved_target = -1;
@@ -125,7 +129,7 @@ bool ManualZHome::home(const bool move_xy) {
     fail = MZF_XY;
 
   if (!fail && move_xy) {
-    constexpr xy_pos_t touch_xy = { MANUAL_Z_HOME_X_POINT, MANUAL_Z_HOME_Y_POINT };
+    constexpr xy_pos_t touch_xy = { X_CENTER, Y_CENTER };
     motion.blocking_move(touch_xy, motion.homing_feedrate(X_AXIS));
     planner.synchronize();
   }
@@ -137,7 +141,7 @@ bool ManualZHome::home(const bool move_xy) {
     DWIN_ManualZ_Show(MZS_HEATING);
     fail = wait_for_knob(true);
 
-    if (!fail && touch_retract > 0 && !thermalManager.tooColdToExtrude(0)) {
+    if (!fail && !thermalManager.tooColdToExtrude(0)) {
       // Pull the melt back a little. The logical E position is restored, so the
       // filament stays retracted for the print's own prime line / skirt to make up.
       const float e_before = motion.position.e;
@@ -151,13 +155,14 @@ bool ManualZHome::home(const bool move_xy) {
 
   if (!fail) {
     planner.synchronize();
-    if (!z_driver_responds())
+    chopconf_on = stepperZ.CHOPCONF();
+    if (stepperZ.CRCerror || !(chopconf_on & 0x0F))
       fail = MZF_DRIVER;                // Nothing was written: Z is still held where it was
     else {
       // From here the Z position is unknown until the knob is clicked
       motion.set_axis_never_homed(Z_AXIS);
       released = true;
-      if (z_driver_release()) {
+      if (z_write_chopconf(chopconf_on & ~0x0FUL)) {
         SERIAL_ECHOLNPGM("MANUAL_Z: Z motor released. Clean the nozzle, lower Z by hand until it touches the bed, then click the knob (M108 cancels)");
         DWIN_ManualZ_Show(MZS_TOUCH);
         KEEPALIVE_STATE(PAUSED_FOR_USER);
@@ -168,24 +173,21 @@ bool ManualZHome::home(const bool move_xy) {
     }
   }
 
-  // Every path that touched the driver ends with it switched on again, and checked
-  if (released) {
-    engaged = z_driver_engage();
-    safe_delay(250);                    // Let the rotor settle on its holding position
-    if (!engaged) fail = MZF_ENGAGE;
-  }
+  // Every path that touched the driver ends with the exact previous CHOPCONF, read back.
+  // If that can't be confirmed, nothing can be trusted to move Z: halt below, no lift.
+  const bool engaged = !released || z_write_chopconf(chopconf_on);
+  if (!engaged) fail = MZF_ENGAGE;
 
   if (!fail) {
-    // The nozzle is touching the bed here
-    motion.position.z = (MANUAL_Z_HOME_OFFSET) + TERN0(HAS_HOME_OFFSET, motion.home_offset.z);
+    // The nozzle is touching the bed here. M206 Z shifts this like a probe offset would.
+    motion.position.z = TERN0(HAS_HOME_OFFSET, motion.home_offset.z);
     TERN_(HAS_WORKSPACE_OFFSET, motion.workspace_offset.z = 0);
     motion.sync_plan_position();
     motion.set_axis_trusted(Z_AXIS);
     motion.set_axis_homed(Z_AXIS);
     locked = false;
     SERIAL_ECHOLNPGM("MANUAL_Z: confirmed, Z set to ", motion.position.z);
-    motion.blocking_move_z(MANUAL_Z_HOME_CLEARANCE, motion.homing_feedrate(Z_AXIS));
-    planner.synchronize();
+    lift_after_touch(lift_z);
     // Back to the target from before G28. If the nozzle was off, it is off again.
     thermalManager.setTargetHotend(restore_target, 0);
     DWIN_ManualZ_End(true);
@@ -211,21 +213,20 @@ bool ManualZHome::home(const bool move_xy) {
 
   // Z was moved by hand and is now unknown. Assume the lowest possible value, so the real
   // nozzle is never below where the firmware thinks it is and any later absolute Z move
-  // (some LCD flows make one after G28) can only end up too high. Then raise by the
-  // clearance so a hot nozzle isn't left sitting on the bed.
+  // (some LCD flows make one after G28) can only end up too high. Then raise, so a hot
+  // nozzle isn't left sitting on the bed.
   if (released && engaged) {
     motion.position.z = 0;
     motion.sync_plan_position();
-    motion.blocking_move_z(MANUAL_Z_HOME_CLEARANCE, motion.homing_feedrate(Z_AXIS));
-    planner.synchronize();
+    lift_after_touch(lift_z);
   }
 
   const bool sd_job = card.isPrinting();
 
   DWIN_ManualZ_Show(MZS_FAILED, reason);
 
-  // The Z driver could not be switched back on: nothing can be trusted to move Z.
-  // Halt with the message on screen. A power cycle re-initialises the driver.
+  // The Z driver could not be confirmed on again. Halt with the message on screen.
+  // A power cycle re-initialises the driver.
   if (fail == MZF_ENGAGE) marlin.kill(reason);
 
   for (const millis_t end_ms = millis() + 4000UL; PENDING(millis(), end_ms);) marlin.idle(true);

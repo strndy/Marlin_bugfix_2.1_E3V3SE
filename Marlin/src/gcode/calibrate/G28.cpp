@@ -433,8 +433,7 @@ void GcodeSuite::G28() {
         }
 
         // Init BLTouch ahead of any lateral motion, even if not homing with the probe
-        // (Manual Z homing never drives the probe, which may be unplugged)
-        TERN_(BLTOUCH, if (may_skate && !TERN0(MANUAL_Z_HOMING, doZ)) bltouch.init());
+        TERN_(BLTOUCH, if (may_skate) bltouch.init());
 
       #endif // HAS_Z_AXIS
 
@@ -496,25 +495,22 @@ void GcodeSuite::G28() {
             #endif
 
             #if ENABLED(MANUAL_Z_HOMING)
-              // The user lowers the nozzle onto the bed by hand. No probe, no endstop.
-              // It finishes at MANUAL_Z_HOME_CLEARANCE, so there is no final raise.
-              // 'H' holds the current X/Y, as for a probed home.
+              // The user lowers the nozzle onto the bed by hand (no probe, no endstop) and it
+              // ends lifted, so there is no final raise. 'H' holds the current X/Y.
               manual_z.home(!parser.seen_test('H'));
-            #else
-              #if ENABLED(Z_SAFE_HOMING)
-                // H means hold the current X/Y position when probing.
-                // Otherwise move to the define safe X/Y position before homing Z.
-                if (!parser.seen_test('H'))
-                  home_z_safely();
-                else
-                  motion.homeaxis(Z_AXIS);
-              #else
+            #elif ENABLED(Z_SAFE_HOMING)
+              // H means hold the current X/Y position when probing.
+              // Otherwise move to the define safe X/Y position before homing Z.
+              if (!parser.seen_test('H'))
+                home_z_safely();
+              else
                 motion.homeaxis(Z_AXIS);
-              #endif
+            #else
+              motion.homeaxis(Z_AXIS);
+            #endif
 
-              #if ANY(Z_HOME_TO_MIN, ALLOW_Z_AFTER_HOMING)
-                finalRaiseZ = true;
-              #endif
+            #if ANY(Z_HOME_TO_MIN, ALLOW_Z_AFTER_HOMING) && DISABLED(MANUAL_Z_HOMING)
+              finalRaiseZ = true;
             #endif
           }
         #endif
@@ -607,6 +603,6 @@ void GcodeSuite::G28() {
   // rock_21211104, Prevent back to zero operation after automatic leveling.
   HMI_flag.power_back_to_zero_flag = true;
   // A failed manual Z home leaves Z unknown: let the LCD ask for homing again
-  TERN_(MANUAL_Z_HOMING, if (manual_z.locked && motion.axis_should_home(Z_AXIS)) HMI_flag.power_back_to_zero_flag = false);
+  TERN_(MANUAL_Z_HOMING, if (manual_z.locked) HMI_flag.power_back_to_zero_flag = false);
 
 }
