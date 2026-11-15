@@ -34,17 +34,30 @@
 #endif
 
 static_assert(MANUAL_Z_HOME_TEMP == 0 || (MANUAL_Z_HOME_TEMP >= 100 && MANUAL_Z_HOME_TEMP <= (HEATER_0_MAXTEMP) - 15), "MANUAL_Z_HOME_TEMP must be 0 (no heating) or 100..(HEATER_0_MAXTEMP - 15).");
+#if HAS_HEATED_BED
+  static_assert(MANUAL_Z_HOME_BED_TEMP >= 0 && MANUAL_Z_HOME_BED_TEMP <= (BED_MAXTEMP) - 10, "MANUAL_Z_HOME_BED_TEMP must be 0..(BED_MAXTEMP - 10).");
+#endif
 
-constexpr int16_t touch_temp = MANUAL_Z_HOME_TEMP;  // 0 = touch off cold
+constexpr int16_t touch_temp = MANUAL_Z_HOME_TEMP;  // 0 = touch off cold (no nozzle or bed heating)
+constexpr int16_t nozzle_set_min = 50,              // A target below this counts as "not set"
+                  bed_set_min = 30;
+
+// Print temperature if one is set, else the default
+static int16_t nozzle_temp_for(const int16_t target) { return target >= nozzle_set_min ? target : touch_temp; }
+#if HAS_HEATED_BED
+  static int16_t bed_temp_for(const int16_t target) { return target >= bed_set_min ? target : int16_t(MANUAL_Z_HOME_BED_TEMP); }
+#endif
 constexpr float touch_retract = 1.0f,               // (mm) Pulled back before the touch-off, not restored
                 lift_z = 5.0f;                      // (mm) Height after the touch-off (relative on failure)
-constexpr millis_t wait_limit_ms = SEC_TO_MS(300),  // Limit for heating and for the click
+constexpr millis_t heat_limit_ms = SEC_TO_MS(900),  // Limit for heating (a 100 °C bed can take minutes)
+                   wait_limit_ms = SEC_TO_MS(300),  // Limit for the click, nozzle hot on the bed
                    hands_off_ms = 2000;             // Warning before Z moves under power after the prompt
 
 ManualZHome manual_z;
 
 bool ManualZHome::locked; // = false
 int16_t ManualZHome::saved_target = -1;
+int16_t ManualZHome::saved_bed; // = 0
 
 //
 // Z driver output stage. X/Y/Z/E share one enable pin on this board, so the only way to free
@@ -69,7 +82,7 @@ enum ManualZFail : uint8_t { MZF_NONE, MZF_XY, MZF_TIMEOUT, MZF_CANCEL, MZF_HOST
 // Wait for the knob while keeping heaters, watchdog, UI and serial serviced.
 // X/Y stay energised: idle(true) holds off the stepper idle timeout.
 static ManualZFail wait_for_knob(const bool heating) {
-  const millis_t timeout_ms = millis() + wait_limit_ms;
+  const millis_t timeout_ms = millis() + (heating ? heat_limit_ms : wait_limit_ms);
   millis_t next_report_ms = millis();
   ManualZFail result;
   marlin.heatup_start();                // M108 (emergency parser) clears this
@@ -77,10 +90,20 @@ static ManualZFail wait_for_knob(const bool heating) {
     marlin.idle(true);
     const millis_t ms = millis();
     if (heating) {
-      if (thermalManager.wholeDegHotend(0) >= touch_temp - 2) { result = MZF_NONE; break; }
+      const int16_t nt = thermalManager.degTargetHotend(0);
+      bool hot = thermalManager.wholeDegHotend(0) >= nt - 2;
+      #if HAS_HEATED_BED
+        const int16_t bt = thermalManager.degTargetBed();
+        hot = hot && (bt == 0 || thermalManager.wholeDegBed() >= bt - 2);
+      #endif
+      if (hot) { result = MZF_NONE; break; }
       if (ELAPSED(ms, next_report_ms)) {
         next_report_ms = ms + 5000UL;
-        SERIAL_ECHOLNPGM("MANUAL_Z: heating ", thermalManager.wholeDegHotend(0), "/", touch_temp);
+        SERIAL_ECHOLNPGM("MANUAL_Z: heating nozzle ", thermalManager.wholeDegHotend(0), "/", nt
+          #if HAS_HEATED_BED
+            , " bed ", thermalManager.wholeDegBed(), "/", bt
+          #endif
+        );
       }
     }
     const ManualZReply reply = DWIN_ManualZ_Reply();
@@ -102,12 +125,23 @@ static void lift_after_touch(const float z) {
   planner.synchronize();
 }
 
+// Set the touch-off targets: print temperature if set, else the defaults
+static void set_touch_targets() {
+  if (touch_temp <= 0) return;
+  thermalManager.setTargetHotend(nozzle_temp_for(thermalManager.degTargetHotend(0)), 0);
+  TERN_(HAS_HEATED_BED, thermalManager.setTargetBed(bed_temp_for(thermalManager.degTargetBed())));
+}
+
 void ManualZHome::preheat() {
   saved_target = thermalManager.degTargetHotend(0);
-  if (touch_temp > 0) {
-    thermalManager.setTargetHotend(touch_temp, 0);
-    SERIAL_ECHOLNPGM("MANUAL_Z: heating nozzle to ", touch_temp, " while homing XY");
-  }
+  saved_bed = TERN0(HAS_HEATED_BED, thermalManager.degTargetBed());
+  set_touch_targets();
+  if (touch_temp > 0)
+    SERIAL_ECHOLNPGM("MANUAL_Z: heating nozzle to ", thermalManager.degTargetHotend(0)
+      #if HAS_HEATED_BED
+        , ", bed to ", thermalManager.degTargetBed()
+      #endif
+      , " while homing XY");
 }
 
 bool ManualZHome::home(const bool move_xy) {
@@ -115,7 +149,9 @@ bool ManualZHome::home(const bool move_xy) {
   bool released = false;
   uint32_t chopconf_on = 0;
 
-  const int16_t restore_target = saved_target < 0 ? thermalManager.degTargetHotend(0) : saved_target;
+  const bool had_preheat = saved_target >= 0;
+  const int16_t restore_target = had_preheat ? saved_target : thermalManager.degTargetHotend(0);
+  const int16_t restore_bed = had_preheat ? saved_bed : TERN0(HAS_HEATED_BED, thermalManager.degTargetBed());
   saved_target = -1;
 
   // The probe / Z-min input may float with the probe unplugged. Nothing below
@@ -135,8 +171,8 @@ bool ManualZHome::home(const bool move_xy) {
   }
 
   if (!fail && touch_temp > 0) {
-    // Normally set by preheat() already. Use the same temperature every time.
-    thermalManager.setTargetHotend(touch_temp, 0);
+    // Normally set by preheat() already
+    set_touch_targets();
     SERIAL_ECHOLNPGM("MANUAL_Z: heating, please wait (knob click or M108 cancels)");
     DWIN_ManualZ_Show(MZS_HEATING);
     fail = wait_for_knob(true);
@@ -188,10 +224,11 @@ bool ManualZHome::home(const bool move_xy) {
     locked = false;
     SERIAL_ECHOLNPGM("MANUAL_Z: confirmed, Z set to ", motion.position.z);
     lift_after_touch(lift_z);
-    // Back to the target from before G28. If the nozzle was off, it is off again.
+    // Back to the targets from before G28. What was off is off again.
     thermalManager.setTargetHotend(restore_target, 0);
+    TERN_(HAS_HEATED_BED, thermalManager.setTargetBed(restore_bed));
     DWIN_ManualZ_End(true);
-    SERIAL_ECHOLNPGM("MANUAL_Z: done, Z at ", motion.position.z, ", nozzle target ", restore_target);
+    SERIAL_ECHOLNPGM("MANUAL_Z: done, Z at ", motion.position.z, ", nozzle target ", restore_target, ", bed target ", restore_bed);
     return true;
   }
 
@@ -199,6 +236,7 @@ bool ManualZHome::home(const bool move_xy) {
   // Failed: heater off, Z unknown, no further G-code moves until Z is homed
   //
   thermalManager.setTargetHotend(0, 0);
+  TERN_(HAS_HEATED_BED, thermalManager.setTargetBed(0));
   motion.set_axis_never_homed(Z_AXIS);
   locked = true;
 
@@ -209,7 +247,7 @@ bool ManualZHome::home(const bool move_xy) {
     : fail == MZF_HOST    ? F("cancelled by host (M108/M524)")
     : fail == MZF_DRIVER  ? F("Z driver not responding")
     :                       F("Z DRIVER STILL OFF - POWER CYCLE");
-  SERIAL_ECHOLN(F("MANUAL_Z: FAILED, "), reason, F(". Nozzle heater off, Z NOT homed, moves blocked until G28 Z succeeds"));
+  SERIAL_ECHOLN(F("MANUAL_Z: FAILED, "), reason, F(". Heaters off, Z NOT homed, moves blocked until G28 Z succeeds"));
 
   // Z was moved by hand and is now unknown. Assume the lowest possible value, so the real
   // nozzle is never below where the firmware thinks it is and any later absolute Z move

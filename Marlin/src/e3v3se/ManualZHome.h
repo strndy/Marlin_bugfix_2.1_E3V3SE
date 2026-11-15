@@ -25,6 +25,7 @@ public:
 
 private:
   static int16_t saved_target;  // Nozzle target before G28, or -1 if preheat() has not run
+  static int16_t saved_bed;     // Bed target before G28 (valid when saved_target >= 0)
 };
 
 extern ManualZHome manual_z;

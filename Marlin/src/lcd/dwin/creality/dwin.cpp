@@ -11329,7 +11329,12 @@ void HMI_Boot_Set() // Boot settings
   }
 
   static void Draw_ManualZ_Temp() {
-    DWIN_Draw_IntValue(true, true, 0, font8x16, Color_White, Color_Bg_Black, 3, 68, 156, thermalManager.wholeDegHotend(0));
+    DWIN_Draw_IntValue(true, true, 0, font8x16, Color_White, Color_Bg_Black, 3, 68, 154, thermalManager.wholeDegHotend(0));
+    DWIN_Draw_IntValue(true, true, 0, font8x16, Color_White, Color_Bg_Black, 3, 108, 154, thermalManager.degTargetHotend(0));
+    #if HAS_HEATED_BED
+      DWIN_Draw_IntValue(true, true, 0, font8x16, Color_White, Color_Bg_Black, 3, 68, 172, thermalManager.wholeDegBed());
+      DWIN_Draw_IntValue(true, true, 0, font8x16, Color_White, Color_Bg_Black, 3, 108, 172, thermalManager.degTargetBed());
+    #endif
   }
 
   void DWIN_ManualZ_Show(const ManualZScreen screen, FSTR_P const reason/*=nullptr*/) {
@@ -11354,10 +11359,13 @@ void HMI_Boot_Set() // Boot settings
     switch (screen) {
       case MZS_HEATING:
         DWIN_Draw_String(false, false, font8x16, Color_Yellow, Color_Bg_Black, 12, 132, F("Heating, please wait"));
-        DWIN_Draw_String(false, false, font8x16, Color_White, Color_Bg_Black, 12, 156, F("Nozzle     /" STRINGIFY(MANUAL_Z_HOME_TEMP) " C"));
+        DWIN_Draw_String(false, false, font8x16, Color_White, Color_Bg_Black, 12, 154, F("Nozzle     /    C"));
+        #if HAS_HEATED_BED
+          DWIN_Draw_String(false, false, font8x16, Color_White, Color_Bg_Black, 12, 172, F("Bed        /    C"));
+        #endif
         Draw_ManualZ_Temp();
-        DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 12, 186, F("Then you lower Z by hand."));
-        DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 12, 204, F("Click the knob to cancel."));
+        DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 12, 194, F("Then you lower Z by hand."));
+        DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 12, 210, F("Click the knob to cancel."));
         break;
       case MZS_TOUCH:
         DWIN_Draw_String(false, false, font8x16, Color_Yellow, Color_Bg_Black, 12, 128, F("Z motor is released"));
@@ -11375,7 +11383,7 @@ void HMI_Boot_Set() // Boot settings
       case MZS_FAILED:
         DWIN_Draw_String(false, false, font8x16, Color_Red, Color_Bg_Black, 12, 132, F("Z is NOT homed"));
         if (reason) DWIN_Draw_String(false, false, font6x12, Color_Yellow, Color_Bg_Black, 8, 160, reason);
-        DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 8, 180, F("Nozzle heater is off."));
+        DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 8, 180, F("Heaters are off."));
         DWIN_Draw_String(false, false, font6x12, Color_White, Color_Bg_Black, 8, 195, F("Moves are blocked until Z is homed."));
         break;
     }

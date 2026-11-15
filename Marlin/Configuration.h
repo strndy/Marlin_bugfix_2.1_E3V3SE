@@ -2013,7 +2013,11 @@
  */
 //#define MANUAL_Z_HOMING
 #if ENABLED(MANUAL_Z_HOMING)
-  #define MANUAL_Z_HOME_TEMP 220  // (°C) Nozzle temperature for the touch-off. 0 = do not heat.
+  // Touch off at print temperature: a target already set (e.g. by the print's start G-code)
+  // is used as is. A nozzle target below 50 °C / bed target below 30 °C counts as "not set"
+  // and is replaced by these defaults. Both are waited for before the prompt.
+  #define MANUAL_Z_HOME_TEMP     220  // (°C) Default nozzle temperature. 0 = do not heat at all.
+  #define MANUAL_Z_HOME_BED_TEMP  50  // (°C) Default bed temperature. 0 = do not heat the bed.
 #endif
 //#define XY_AFTER_HOMING { 10, 10 }  // (mm) Move to an XY position after homing (and raising Z)
 

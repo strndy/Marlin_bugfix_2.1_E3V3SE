@@ -300,7 +300,7 @@ operation. A disconnected sensor can otherwise go unnoticed.
 
 `MANUAL_Z_HOMING` (off by default, C13 only so far, **not yet tested on a printer**) replaces the probed Z home with a touch-off done by hand, so the CR Touch can be unclipped for printing. The probe stays configured: clip it back on whenever you want a new mesh.
 
-**Enable:** uncomment `MANUAL_Z_HOMING` in `Configuration.h` (run `config_profile.py derive` afterwards), or tick **MANUAL_Z_HOMING** in the GitHub Actions build dialog. The one setting below it is the touch-off temperature (`MANUAL_Z_HOME_TEMP`, 220 °C; 0 = touch off cold). The rest is fixed: touch-off at the bed centre, 1 mm retract, 5 mm lift, 5 minute limit for heating and for the click.
+**Enable:** uncomment `MANUAL_Z_HOMING` in `Configuration.h` (run `config_profile.py derive` afterwards), or tick **MANUAL_Z_HOMING** in the GitHub Actions build dialog. Two settings below it: the default nozzle temperature (`MANUAL_Z_HOME_TEMP`, 220 °C; 0 = touch off cold, no heating at all) and the default bed temperature (`MANUAL_Z_HOME_BED_TEMP`, 50 °C). The touch-off happens at print temperature: if a target is already set (e.g. by your start G-code before `G28`), it is used; a nozzle target below 50 °C or a bed target below 30 °C counts as "not set" and the defaults are used. Both are waited for. Afterwards the targets from before `G28` are restored (off if they were off). The rest is fixed: touch-off at the bed centre, 1 mm retract, 5 mm lift, 15 minute limit for heating, 5 minute limit for the click.
 
 **What `G28` does when it homes Z** (`G28 X Y` is unchanged):
 

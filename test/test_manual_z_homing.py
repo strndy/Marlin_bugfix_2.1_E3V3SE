@@ -36,6 +36,9 @@ CONFIG = r'''
 #define Z_HOME_TO_MIN 1
 #define AXIS_HAS_UART(A) 1
 #define HEATER_0_MAXTEMP 310
+#define HAS_HEATED_BED 1
+#define MANUAL_Z_HOME_BED_TEMP 50
+#define BED_MAXTEMP 125
 
 using millis_t = uint32_t;
 using FSTR_P = const char*;
@@ -64,6 +67,8 @@ struct xy_pos_t { float x, y; };
 struct Sim {
   // Printer state
   int target = 0, temp = 25;
+  int bed_target = 0, bed_temp = 22;
+  int touch_target = -1, touch_bed = -1;  // Targets seen when Z was released
   bool xy_homed = true, z_homed = false, z_trusted = false, heating_flag = true;
   bool endstops_on = true, sd_printing = false, abort_sd = false, job = false;
   uint32_t chopconf = 0x10000053;    // Driver register as configured at boot (TOFF=3)
@@ -107,6 +112,9 @@ struct Thermal {
   int degTargetHotend(uint8_t) { return sim.target; }
   void setTargetHotend(int c, uint8_t) { sim.target = c; }
   int wholeDegHotend(uint8_t) { return sim.temp; }
+  int degTargetBed() { return sim.bed_target; }
+  void setTargetBed(int c) { sim.bed_target = c; }
+  int wholeDegBed() { return sim.bed_temp; }
   bool tooColdToExtrude(uint8_t) { return sim.temp < 170; }
 };
 extern Thermal thermalManager;
@@ -157,15 +165,17 @@ void DWIN_ManualZ_Show(const ManualZScreen s, FSTR_P) { sim.screens.push_back(s)
 ManualZReply DWIN_ManualZ_Reply() { const int r = sim.reply; sim.reply = 0; return ManualZReply(r); }
 void DWIN_ManualZ_End(const bool ok) { sim.ui_end = ok; }
 
-static void reset(const int prior_target) {
+static void reset(const int prior_target, const int prior_bed=0) {
   sim = Sim(); motion = Motion(); serial_log.clear(); stepperZ.CRCerror = false;
-  sim.target = prior_target; manual_z.locked = false;
+  sim.target = prior_target; sim.bed_target = prior_bed; manual_z.locked = false;
 }
 
 // The nozzle heats 5 C per idle tick; the user's hand lowers Z while the motor is off
 static void physics(Sim &s) {
   card.flag.abort_sd_printing = s.abort_sd;
   if (s.target > s.temp) s.temp += 5;
+  if (s.bed_target > s.bed_temp) s.bed_temp += 1;   // The bed is slower
+  if (s.toff() == 0 && s.touch_target < 0) { s.touch_target = s.target; s.touch_bed = s.bed_target; }
 }
 
 static bool run() {
@@ -174,7 +184,7 @@ static bool run() {
 }
 
 static void check_failed(const char *name) {
-  if (!(sim.target == 0 && !sim.z_homed && !sim.z_trusted && manual_z.locked && sim.chopconf == 0x10000053u && !sim.moved_with_driver_off
+  if (!(sim.target == 0 && sim.bed_target == 0 && !sim.z_homed && !sim.z_trusted && manual_z.locked && sim.chopconf == 0x10000053u && !sim.moved_with_driver_off
          && (sim.toff_zero_writes == 0 || sim.lift_warned))) {
     printf("FAIL %s: target=%d homed=%d locked=%d chopconf=%x\n", name, sim.target, sim.z_homed, manual_z.locked, unsigned(sim.chopconf));
     for (auto &l : serial_log) printf("  %s\n", l.c_str());
@@ -196,6 +206,8 @@ int main() {
   assert(sim.lift_warned);                             // Hands-off screen, then >= 2 s, then the lift
   assert(motion.position.z == 5 && sim.real_z == 5);   // Logical Z matches the real height
   assert(sim.target == 200);                           // Previous target restored
+  assert(sim.touch_target == 200 && sim.touch_bed == 50); // Nozzle print temp kept, bed unset -> default
+  assert(sim.bed_target == 0 && sim.bed_temp >= 48);    // Bed waited for, then back off
   assert(sim.e_moves == 1 && motion.position.e == 7);  // Retracted, logical E unchanged
   assert(sim.moved_xy && !sim.endstops_on && sim.ui_end == 1);
   assert(sim.screens == (std::vector<int>{ MZS_HEATING, MZS_TOUCH, MZS_LIFT }));
@@ -205,6 +217,18 @@ int main() {
   reset(0);
   sim.on_idle = [](Sim &s) { physics(s); if (s.toff() == 0) { s.real_z = 0; s.reply = MZR_CONFIRM; } };
   assert(run() && sim.target == 0 && sim.z_homed);
+  assert(sim.touch_target == 220 && sim.touch_bed == 50 && sim.bed_target == 0);  // Defaults, then off again
+
+  // 2b. Print start already set nozzle 240 / bed 70: touch off at those, restore them
+  reset(240, 70);
+  sim.on_idle = [](Sim &s) { physics(s); if (s.toff() == 0) { s.real_z = 0; s.reply = MZR_CONFIRM; } };
+  assert(run() && sim.z_homed);
+  assert(sim.touch_target == 240 && sim.touch_bed == 70 && sim.target == 240 && sim.bed_target == 70);
+
+  // 2c. Below the thresholds (nozzle 40, bed 25) counts as unset
+  reset(40, 25);
+  sim.on_idle = [](Sim &s) { physics(s); if (s.toff() == 0) { s.real_z = 0; s.reply = MZR_CONFIRM; } };
+  assert(run() && sim.touch_target == 220 && sim.touch_bed == 50 && sim.target == 40 && sim.bed_target == 25);
 
   // 3. Nobody clicks: timeout with the nozzle resting on the bed
   reset(210);

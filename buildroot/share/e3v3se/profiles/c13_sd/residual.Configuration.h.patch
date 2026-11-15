@@ -269,7 +269,7 @@
  
  // @section extruder
  
-@@ -1938,6 +2000,21 @@
+@@ -1938,6 +2000,25 @@
                                        // You'll need this much clearance above Z_MAX_POS to avoid grinding.
  
  #define Z_AFTER_HOMING         10   // (mm) Height to move to after homing (if Z was homed)
@@ -286,12 +286,16 @@
 + */
 +//#define MANUAL_Z_HOMING
 +#if ENABLED(MANUAL_Z_HOMING)
-+  #define MANUAL_Z_HOME_TEMP 220  // (°C) Nozzle temperature for the touch-off. 0 = do not heat.
++  // Touch off at print temperature: a target already set (e.g. by the print's start G-code)
++  // is used as is. A nozzle target below 50 °C / bed target below 30 °C counts as "not set"
++  // and is replaced by these defaults. Both are waited for before the prompt.
++  #define MANUAL_Z_HOME_TEMP     220  // (°C) Default nozzle temperature. 0 = do not heat at all.
++  #define MANUAL_Z_HOME_BED_TEMP  50  // (°C) Default bed temperature. 0 = do not heat the bed.
 +#endif
  //#define XY_AFTER_HOMING { 10, 10 }  // (mm) Move to an XY position after homing (and raising Z)
  
  //#define EVENT_GCODE_AFTER_HOMING "M300 P440 S200"  // Commands to run after G28 (and move to XY_AFTER_HOMING)
-@@ -1974,14 +2051,38 @@
+@@ -1974,14 +2055,38 @@
  // The size of the printable area
  #define X_BED_SIZE 220
  #define Y_BED_SIZE 220
@@ -330,7 +334,7 @@
  //#define I_MIN_POS 0
  //#define I_MAX_POS 50
  //#define J_MIN_POS 0
-@@ -2494,6 +2595,14 @@
+@@ -2494,6 +2599,14 @@
    #define XY_DIAG_AC 282.84
    #define XY_DIAG_BD 282.84
    #define XY_SIDE_AD 200.69
@@ -345,7 +349,7 @@
  
    // Or, set the XY skew factor directly:
    //#define XY_SKEW_FACTOR 0.0
-@@ -2579,6 +2688,23 @@
+@@ -2579,6 +2692,23 @@
  #define PREHEAT_2_TEMP_BED    70
  #define PREHEAT_2_TEMP_CHAMBER 35
  #define PREHEAT_2_FAN_SPEED     0 // Value from 0 to 255
@@ -369,7 +373,7 @@
  
  /**
   * @section nozzle park
-@@ -3642,10 +3768,9 @@
+@@ -3642,10 +3772,9 @@
  //#define DWIN_MARLINUI_PORTRAIT      // MarlinUI (portrait orientation)
  //#define DWIN_MARLINUI_LANDSCAPE     // MarlinUI (landscape orientation)
  
