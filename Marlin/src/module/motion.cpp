@@ -50,6 +50,10 @@
   #include "../feature/bltouch.h"
 #endif
 
+#if ENABLED(MANUAL_Z_HOMING)
+  #include "../e3v3se/ManualZHome.h"
+#endif
+
 #if HAS_FILAMENT_SENSOR
   #include "../feature/runout.h"
 #endif
@@ -940,6 +944,8 @@ void Motion::set_current_from_steppers_for_axis(const AxisEnum axis) {
 }
 
 bool Motion::gcode_motion_ignored() {
+  // After a failed manual Z home, refuse G-code moves until Z has been homed
+  if (TERN0(MANUAL_Z_HOMING, manual_z.locked && homing_needed_error(_BV(Z_AXIS)))) return true;
   return !marlin.isRunning() || TERN0(NO_MOTION_BEFORE_HOMING, homing_needed_error());
 }
 

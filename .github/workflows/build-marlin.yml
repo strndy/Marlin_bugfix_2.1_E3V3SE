@@ -57,6 +57,10 @@ on:
         description: "FT_MOTION (configure with M493; disables legacy shaping menu)"
         type: boolean
         default: true
+      manual_z_homing:
+        description: "MANUAL_Z_HOMING (hand-turn Z homing without the probe; untested, default off)"
+        type: boolean
+        default: false
       meatpack:
         description: "MEATPACK_ON_SERIAL_PORT_1 (host transmission compression)"
         type: boolean
@@ -116,6 +120,7 @@ jobs:
             E3V3SE_IGNORE_BED_MINTEMP=${{ inputs.e3v3se_ignore_bed_mintemp }} \
             EXTRA_PREHEAT_LABELS=${{ inputs.extra_preheat_labels }} \
             FT_MOTION=${{ inputs.ft_motion }} \
+            MANUAL_Z_HOMING=${{ inputs.manual_z_homing }} \
             MEATPACK_ON_SERIAL_PORT_1=${{ inputs.meatpack }} \
             ONE_CLICK_PRINT=${{ inputs.one_click_print }} \
             POWER_LOSS_RECOVERY=${{ inputs.power_loss_recovery }} \

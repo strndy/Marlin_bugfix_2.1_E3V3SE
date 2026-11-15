@@ -70,6 +70,10 @@
   #include "../../feature/spindle_laser.h"
 #endif
 
+#if ENABLED(MANUAL_Z_HOMING)
+  #include "../../e3v3se/ManualZHome.h"
+#endif
+
 #define DEBUG_OUT ENABLED(DEBUG_LEVELING_FEATURE)
 #include "../../core/debug_out.h"
 
@@ -384,6 +388,9 @@ void GcodeSuite::G28() {
 
       UNUSED(homeZZ);
 
+      // Manual Z homing: start heating the nozzle now, in parallel with the Z raise and XY homing
+      TERN_(MANUAL_Z_HOMING, if (doZ) manual_z.preheat());
+
       #if !HAS_Y_AXIS
         constexpr bool doY = false;
       #endif
@@ -487,7 +494,11 @@ void GcodeSuite::G28() {
               stepper.set_separate_multi_axis(false);
             #endif
 
-            #if ENABLED(Z_SAFE_HOMING)
+            #if ENABLED(MANUAL_Z_HOMING)
+              // The user lowers the nozzle onto the bed by hand (no probe, no endstop) and it
+              // ends lifted, so there is no final raise. 'H' holds the current X/Y.
+              manual_z.home(!parser.seen_test('H'));
+            #elif ENABLED(Z_SAFE_HOMING)
               // H means hold the current X/Y position when probing.
               // Otherwise move to the define safe X/Y position before homing Z.
               if (!parser.seen_test('H'))
@@ -498,7 +509,7 @@ void GcodeSuite::G28() {
               motion.homeaxis(Z_AXIS);
             #endif
 
-            #if ANY(Z_HOME_TO_MIN, ALLOW_Z_AFTER_HOMING)
+            #if ANY(Z_HOME_TO_MIN, ALLOW_Z_AFTER_HOMING) && DISABLED(MANUAL_Z_HOMING)
               finalRaiseZ = true;
             #endif
           }
@@ -591,5 +602,7 @@ void GcodeSuite::G28() {
   home_flag = false;
   // rock_21211104, Prevent back to zero operation after automatic leveling.
   HMI_flag.power_back_to_zero_flag = true;
+  // A failed manual Z home leaves Z unknown: let the LCD ask for homing again
+  TERN_(MANUAL_Z_HOMING, if (manual_z.locked) HMI_flag.power_back_to_zero_flag = false);
 
 }

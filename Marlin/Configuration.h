@@ -2004,6 +2004,21 @@
 #if ENABLED(DWIN_ZHOME_MENU)
   extern uint8_t CZ_AFTER_HOMING; 
 #endif
+
+/**
+ * E3V3SE: Manual ("hand-turn") Z homing. See README "Manual Z homing".
+ * G28 homes X/Y as usual, then heats and parks the nozzle, switches only the Z driver
+ * off over TMC UART (the enable pin is shared by X/Y/Z/E) and waits until the user has
+ * lowered the nozzle onto the bed by hand and clicked the knob. G28 never uses the probe.
+ */
+//#define MANUAL_Z_HOMING
+#if ENABLED(MANUAL_Z_HOMING)
+  // Touch off at print temperature: a target already set (e.g. by the print's start G-code)
+  // is used as is. A nozzle target below 50 °C / bed target below 30 °C counts as "not set"
+  // and is replaced by these defaults. Both are waited for before the prompt.
+  #define MANUAL_Z_HOME_TEMP     220  // (°C) Default nozzle temperature. 0 = do not heat at all.
+  #define MANUAL_Z_HOME_BED_TEMP  50  // (°C) Default bed temperature. 0 = do not heat the bed.
+#endif
 //#define XY_AFTER_HOMING { 10, 10 }  // (mm) Move to an XY position after homing (and raising Z)
 
 //#define EVENT_GCODE_AFTER_HOMING "M300 P440 S200"  // Commands to run after G28 (and move to XY_AFTER_HOMING)

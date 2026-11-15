@@ -24,6 +24,10 @@
  */
 void GcodeSuite::M8015()
 {
+#if ENABLED(MANUAL_Z_HOMING)
+  // Auto Z-offset probes with the CR Touch and the load cell. Z0 is set by hand instead.
+  SERIAL_ECHOLNPGM("M8015 is not available with MANUAL_Z_HOMING");
+#else
   const bool wLevel = parser.seen('S') ? parser.value_bool() : true; // S0: Get Z offset without leveling; S1: Get Z offset with leveling
   // SERIAL_ECHOLNPGM("M8015: Trying to get Z offset value...");
   float zOffset = 0;
@@ -71,4 +75,5 @@ void GcodeSuite::M8015()
     DWIN_CalibrationFailed();
     SERIAL_ECHOLNPGM("M8015 failed to get Z offset.");
   }
+#endif // !MANUAL_Z_HOMING
 }
