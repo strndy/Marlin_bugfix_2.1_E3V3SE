@@ -2503,26 +2503,11 @@
 #endif
 
 #if ENABLED(PAD_Z_HOMING)
-  // Pad Z homing tunables. Forces are raw HX711 counts relative to the unloaded baseline;
+  // Pad Z homing thresholds, in raw HX711 counts relative to the unloaded reading.
   // 'M8015 T' prints live readings (no motion) to check them against your sensor.
-  #define PAD_HOME_X               AUTOZ_TOOL_X // (mm) Nozzle X/Y over the strain-gauge pad
-  #define PAD_HOME_Y               AUTOZ_TOOL_Y
-  #define PAD_Z_SPEED_MM_S         4     // (mm/s) Z speed while stepping (no acceleration, keep low)
-  #define PAD_NOISE_MAX            500   // (counts) Max idle min..max spread; more = halt before any descent
-  #define PAD_COARSE_STEP_MM       0.05  // (mm) Coarse descent step, one HX711 sample per step
-  #define PAD_COARSE_MAX_TRAVEL_MM (Z_MAX_POS + 10) // (mm) Halt if no contact after this much descent
-  #define PAD_KNOWN_Z_MARGIN_MM    5     // (mm) If Z was already homed: halt if no contact this far below the expected point
-  #define PAD_COARSE_TRIGGER       1500  // (counts) Coarse contact threshold (confirmed by a second sample)
-  #define PAD_FORCE_LIMIT          8000  // (counts) Hard limit against the initial baseline
-  #define PAD_BACKOFF_MM           1.0   // (mm) Lift after coarse contact; fine passes start here
-  #define PAD_FINE_STEP_MM         0.02  // (mm) Fine pass step
-  #define PAD_FINE_TRIGGER         1200  // (counts) Fine contact threshold
-  #define PAD_FINE_MAX_DEPTH_MM    0.5   // (mm) Fine contact must be within this distance of the coarse contact
-  #define PAD_FINE_REPEATS         3     // Fine passes (odd); the median is used
-  #define PAD_FINE_MAX_SPREAD_MM   0.10  // (mm) Halt if the fine passes disagree by more than this
-  #define PAD_Z_COMPENSATION_MM    0.0   // (mm) Z assigned to the contact point. + = nozzle prints closer to the bed
-  #define PAD_CLEARANCE_AFTER_MM   5     // (mm) Z after pad homing
-  //#define PAD_HOME_NOZZLE_TEMP   140   // (°C) Heat the nozzle to at least this before touching (softens ooze)
+  #define PAD_NOISE_MAX       500  // Max idle min..max spread; more = halt before any descent
+  #define PAD_COARSE_TRIGGER 1500  // Contact threshold of the first descent
+  #define PAD_FINE_TRIGGER   1200  // Contact threshold of the slow measuring passes
 #endif
 
 // @section extruder

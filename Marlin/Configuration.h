@@ -155,7 +155,7 @@
 
 // Home Z by touching the nozzle on the bed strain-gauge pad (HX711) instead of the CR Touch,
 // so the probe can be unplugged for printing. The probe stays configured for G29.
-// EXPERIMENTAL: read README "Pad Z homing" before the first G28. Tunables: PAD_* in Configuration_adv.h.
+// EXPERIMENTAL: read README "Pad Z homing" before the first G28. Thresholds: PAD_* in Configuration_adv.h.
 //#define PAD_Z_HOMING
 
 

@@ -25,7 +25,7 @@
   #endif
 
   // Called by G28 in place of the probe-based Z homing, after X/Y are homed.
-  // On success Z is homed and the nozzle is PAD_CLEARANCE_AFTER_MM above the pad.
+  // On success Z is homed and the nozzle is about 1 mm above the pad (G28 then lifts it).
   // On ANY failure it calls kill(): heaters off, printer halted until reset.
   void pad_home_z();
 
