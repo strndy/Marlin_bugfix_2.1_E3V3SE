@@ -492,11 +492,8 @@ void GcodeSuite::G28() {
             #endif
 
             #if ENABLED(PAD_Z_HOMING)
-              if (!pad_home_suspended)
-                pad_home_z(); // Nozzle touch on the strain-gauge pad. Never uses the probe.
-              else
-            #endif
-            #if ENABLED(Z_SAFE_HOMING)
+              pad_home_z(); // Nozzle touch on the strain-gauge pad. Never uses the probe.
+            #elif ENABLED(Z_SAFE_HOMING)
               // H means hold the current X/Y position when probing.
               // Otherwise move to the define safe X/Y position before homing Z.
               if (!parser.seen_test('H'))

@@ -29,10 +29,6 @@
   // On ANY failure it calls kill(): heaters off, printer halted until reset.
   void pad_home_z();
 
-  // True while the automatic Z-offset routine runs. That routine needs the CR Touch and
-  // assumes probe-homed Z, so G28 homes Z with the probe (stock behavior) while this is set.
-  extern bool pad_home_suspended;
-
   // M8015 T[seconds]: print live HX711 readings without moving anything.
   void pad_sensor_report(const uint8_t seconds);
 

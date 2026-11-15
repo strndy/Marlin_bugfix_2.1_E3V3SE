@@ -62,8 +62,6 @@ static_assert(PAD_Z_SPEED_MM_S >= 0.5 && PAD_Z_SPEED_MM_S <= 8, "PAD_Z_SPEED_MM_
 
 enum PadRead : uint8_t { PAD_OK, PAD_TIMEOUT, PAD_SATURATED, PAD_STUCK };
 
-bool pad_home_suspended; // = false
-
 static HX711 pad_hx;
 static int32_t pad_last_raw;
 static uint8_t pad_same_count;

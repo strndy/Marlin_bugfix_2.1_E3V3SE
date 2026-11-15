@@ -213,7 +213,7 @@ Missing measurements appear gray and receive `INCOMPLETE` instead of a quality r
 
 ## Pad Z homing (experimental)
 
-`PAD_Z_HOMING` (off by default) homes Z by touching the **nozzle** on the bed strain-gauge pad at the front-left bed mount (`AUTOZ_TOOL_X/Y`, the HX711 sensor of the automatic Z-offset) instead of homing with the CR Touch. The CR Touch stays configured, so `G29` and the automatic Z-offset still work when it is clipped on, but `G28` never deploys or reads it and works with the probe unplugged.
+`PAD_Z_HOMING` (off by default) homes Z by touching the **nozzle** on the bed strain-gauge pad at the front-left bed mount (`AUTOZ_TOOL_X/Y`, the HX711 sensor of the automatic Z-offset) instead of homing with the CR Touch. The CR Touch stays configured, so `G29` still works when it is clipped on, but `G28` never deploys or reads it and works with the probe unplugged.
 
 **This has only been compiled, never run on a printer. The thresholds are estimates. Follow the first-test procedure.**
 
@@ -234,7 +234,17 @@ What `G28` does with the option on: X/Y home as usual, the nozzle moves over the
 - Z0 is the nozzle contact on the pad, plus `PAD_Z_COMPENSATION_MM` (build time) plus `M206 Z` (stored with `M500`, applied at the next `G28`; positive = nozzle closer to the bed; the sum is limited to ±1 mm, larger values halt).
 - The probe Z offset (`M851 Z`, LCD Z-offset) is **not** used for homing. It only matters while `G29` measures the mesh: an offset that is wrong by some amount shifts the whole stored mesh by that amount.
 - Changing the Z-offset from the LCD during a print still moves the nozzle at once, but only until the next `G28`. To keep it, either re-run leveling with the probe on (the new offset is then part of the mesh), or put the correction into `M206 Z` and `M500`.
-- Making a mesh: clip the CR Touch on and plug it in (printer off), then run leveling from the LCD (automatic Z-offset, then `G29`) or send `G28` + `G29`; the mesh is saved. The automatic Z-offset routine (`M8015`) homes Z with the probe while it runs, as in the stock firmware, and re-homes on the pad before the mesh is measured, so the mesh is always relative to the pad contact. Power off, unplug the probe, print. `G28` re-enables the stored mesh by itself (`ENABLE_LEVELING_AFTER_G28`); `M420 S1` in the start G-code does no harm. Remove `G29` and `M8015` from the start G-code: with the probe unplugged they stop the printer with a probe error.
+- Making a mesh: clip the CR Touch on and plug it in (printer off), then use **Leveling → Start Bed Leveling** on the LCD or send `G28` + `G29`; the mesh is saved and is relative to the pad contact. Mesh view, mesh edit and `M420 S1` work as before. Power off, unplug the probe, print. `G28` re-enables the stored mesh by itself (`ENABLE_LEVELING_AFTER_G28`); `M420 S1` in the start G-code does no harm. Remove `G29` from the start G-code: with the probe unplugged it stops the printer with a probe error.
+
+### Removed with the option on
+
+Everything that would use the probe without an explicit leveling request is taken out, because the probe may be unplugged:
+
+- **Automatic Z-offset**: the **Start Auto Z-Offset** row is gone from the Leveling menu and plain `M8015` only prints a notice (the routine assumes probe-homed Z and would drag the nozzle over the bed here). `M8015 T` still prints the sensor readings. The probe Z offset is therefore whatever is stored (`M851 Z`); an error in it is a constant mesh shift, corrected as described above.
+- **First-boot wizard** (language, automatic Z-offset, leveling): skipped. A fresh EEPROM boots to the main menu in English; set the language under Prepare.
+- **Level calibration before a print** (the toggle in the file preview): removed, a print start never probes.
+
+Still probe-dependent, and only on request: `G29` / Start Bed Leveling, `G30`, `M48`, `M401`/`M402`, and **Probe Deploy / Probe Stow** in the Move menu. With the probe unplugged these end in a probe error that stops the printer.
 
 ### Not verified
 
@@ -244,7 +254,7 @@ What `G28` does with the option on: X/Y home as usual, the nozzle moves over the
 - Bed or nozzle heating may disturb the sensor and cause a halt; a halt at print start needs a power cycle.
 - A hot nozzle can mark the bed surface at the pad, and ooze under the nozzle makes Z read high.
 - The bed bends slightly under the trigger force, so the first layer may need a constant correction.
-- The automatic Z-offset / LCD leveling flow with the option on (probe homing during the routine, pad homing after it) is untested as well.
+- The reduced Leveling menu, the skipped wizard and the file preview without the level-calibration toggle are untested on the display.
 - With the probe unplugged its input reads "triggered" and the servo commands at boot and at `G28` go nowhere. From the code this is harmless because nothing reads the probe outside probing, but it has not been tried.
 
 ## Input shaping with FT_Motion (`M493`)

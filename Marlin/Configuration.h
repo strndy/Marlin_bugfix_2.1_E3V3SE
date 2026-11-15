@@ -182,6 +182,9 @@
 // #define K8_EXTRUDER             0 //1 is K8 extruder 0 is Elf extruder
 #define USER_LEVEL_CHECK        1 //Leveling calibration enable
 #define WUHAN_CHENGE_PLATFORM   1 //Wuhan changed platform board 20230913_Rock
+#if ENABLED(PAD_Z_HOMING)
+  #undef USER_LEVEL_CHECK         // Never probe at print start: the CR Touch may be unplugged
+#endif
 
 // @section stepper drivers
 

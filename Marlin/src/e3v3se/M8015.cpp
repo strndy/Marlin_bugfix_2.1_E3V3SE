@@ -27,7 +27,9 @@ void GcodeSuite::M8015()
 {
   #if ENABLED(PAD_Z_HOMING)
     // M8015 T[seconds]: live strain-gauge readings for the pad Z homing self-test (no motion)
-    if (parser.seen('T')) { pad_sensor_report(parser.has_value() ? constrain(parser.value_int(), 1, 60) : 10); return; }
+    if (parser.seen('T')) pad_sensor_report(parser.has_value() ? constrain(parser.value_int(), 1, 60) : 10);
+    else SERIAL_ECHOLNPGM("M8015: automatic Z-offset is not available with PAD_Z_HOMING (M8015 T shows the sensor)");
+    return; // The measuring routine assumes probe-homed Z; it must never run here
   #endif
   const bool wLevel = parser.seen('S') ? parser.value_bool() : true; // S0: Get Z offset without leveling; S1: Get Z offset with leveling
   // SERIAL_ECHOLNPGM("M8015: Trying to get Z offset value...");
