@@ -48,6 +48,10 @@ constexpr float Z_SPEED_MM_S      = 4,     // direct stepping speed, no accelera
 constexpr uint8_t FINE_PASSES     = 3;     // odd: the median is used
 constexpr millis_t HX711_TIMEOUT_MS = 150; // 80 Hz => 12.5 ms per sample
 constexpr uint8_t STUCK_COUNT     = 8;     // identical raw readings in a row = dead data line
+// Measured on a C13 at 50 °C: ~100 counts/g, heated-bed drift up to ~300 counts/s while settling
+constexpr millis_t SETTLE_INTERVAL_MS = 2000, SETTLE_LIMIT_MS = SEC_TO_MS(180);
+constexpr int32_t SETTLE_MAX_COUNTS = 200;  // per interval, i.e. ~1 g/s
+constexpr int32_t DRIFT_TRACK_MAX   = 30000; // descent may follow this much slow drift (~300 g)
 #define PAD_RING 32                        // fine pass look-back (steps)
 
 static_assert(PAD_NOISE_MAX > 0 && 2 * (PAD_NOISE_MAX) <= PAD_FINE_TRIGGER, "PAD_FINE_TRIGGER must be at least 2 x PAD_NOISE_MAX.");
@@ -207,6 +211,35 @@ static void pad_heat_and_wait() {
 
 struct PadStats { int32_t vmin, vmax, avg; };
 
+// Mean of n samples (no noise check)
+static int32_t pad_mean(const uint8_t n) {
+  int64_t sum = 0;
+  for (uint8_t i = 0; i < n; ++i) sum += pad_sample(0);
+  return int32_t(sum / n);
+}
+
+// Wait until the reading changes by less than SETTLE_MAX_COUNTS per SETTLE_INTERVAL_MS, twice in a
+// row. Gives up after SETTLE_LIMIT_MS and continues: the descent tracks slow drift anyway.
+static void pad_wait_settled() {
+  ui.set_status(F("Pad Z homing: sensor settling"));
+  const millis_t limit = millis() + SETTLE_LIMIT_MS;
+  int32_t prev = pad_mean(16);
+  uint8_t calm = 0;
+  for (;;) {
+    for (const millis_t next = millis() + SETTLE_INTERVAL_MS; PENDING(millis(), next);) {
+      marlin.idle_no_sleep();
+      pad_check(0);
+    }
+    pad_reader_reset();                                // idle() took longer than a sample period
+    const int32_t now = pad_mean(16), step = pad_abs(now - prev);
+    prev = now;
+    calm = step < SETTLE_MAX_COUNTS ? calm + 1 : 0;
+    SERIAL_ECHOLNPGM("PAD_HOME: settling, change=", step, " per ", SETTLE_INTERVAL_MS, " ms");
+    if (calm >= 2) return;
+    if (ELAPSED(millis(), limit)) { SERIAL_ECHOLNPGM("PAD_HOME: still drifting, continuing (drift is tracked)"); return; }
+  }
+}
+
 // Baseline over n samples (after dropping the pending one). Halts on a bad or noisy sensor.
 static PadStats pad_baseline(const uint8_t n, FSTR_P const noisy_msg) {
   int32_t vmin = INT32_MAX, vmax = INT32_MIN;
@@ -306,8 +339,11 @@ void pad_home_z() {
   stepper.enable_axis(Z_AXIS);
   safe_delay(300);
 
-  // ---- Sensor health, before any descent ----
+  // ---- Wait for the gauge to stop drifting (a freshly heated bed drifts up to ~300 counts/s) ----
   pad_reader_reset();
+  pad_wait_settled();
+
+  // ---- Sensor health, before any descent ----
   const millis_t t0 = millis();
   const PadStats base = pad_baseline(32, F("sensor noisy or loaded"));
   SERIAL_ECHOLNPGM("PAD_HOME: sensor ok, baseline=", base.avg, " noise=", base.vmax - base.vmin,
@@ -321,7 +357,7 @@ void pad_home_z() {
   SERIAL_ECHOLNPGM("PAD_HOME: descending, travel limit ", p_float_t(max_mm, 1), z_known ? " mm (Z was known)" : " mm (Z unknown)");
   ui.set_status(F("Pad Z homing: descending"));
   long travelled = 0;
-  float track = base.avg;                              // follows slow (thermal) drift, at most one trigger level
+  float track = base.avg;                              // follows slow (thermal) drift, bounded
   int32_t d;
   uint8_t glitches = 0;
   for (;;) {
@@ -340,7 +376,9 @@ void pad_home_z() {
     }
     else if (d < (PAD_COARSE_TRIGGER) / 4) {
       track += float(v - int32_t(track)) * (1.0f / 32.0f);
-      track = constrain(track, float(base.avg - (PAD_COARSE_TRIGGER)), float(base.avg + (PAD_COARSE_TRIGGER)));
+      // Bounded so a broken sensor can't wander off forever; a real contact is a fast jump,
+      // which this gate (d < trigger/4, gain 1/32 per sample) never follows.
+      track = constrain(track, float(base.avg - DRIFT_TRACK_MAX), float(base.avg + DRIFT_TRACK_MAX));
     }
     marlin.idle_no_sleep();                            // heaters, watchdog, LCD
   }
@@ -356,7 +394,10 @@ void pad_home_z() {
     const PadStats rs = pad_baseline(16, F("sensor noisy after contact"));
     const int32_t residual = rs.avg - int32_t(track);
     SERIAL_ECHOLNPGM("PAD_HOME: backed off ", p_float_t(BACKOFF_MM, 2), " mm, residual=", residual);
-    if (pad_abs(residual) > (PAD_COARSE_TRIGGER) / 2) pad_fail(F("pad still loaded after backoff"), travelled - backoff_n);
+    // A heated gauge keeps ~1% of a load for a while after it is removed (measured), so only a
+    // residual as large as the trigger itself means the nozzle is still pressing. Each fine pass
+    // takes its own fresh baseline.
+    if (pad_abs(residual) > (PAD_COARSE_TRIGGER)) pad_fail(F("pad still loaded after backoff"), travelled - backoff_n);
   }
 
   // ---- Fine passes, from the backed-off position ----
