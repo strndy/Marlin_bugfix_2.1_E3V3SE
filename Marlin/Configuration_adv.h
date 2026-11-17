@@ -2505,9 +2505,10 @@
 #if ENABLED(PAD_Z_HOMING)
   // Pad Z homing thresholds, in raw HX711 counts relative to the unloaded reading.
   // 'M8015 T' prints live readings (no motion) to check them against your sensor.
-  #define PAD_NOISE_MAX       1000 // Max idle min..max spread; more = halt before any descent
-  #define PAD_COARSE_TRIGGER 3000  // Contact threshold of the first descent
-  #define PAD_FINE_TRIGGER   2000  // Contact threshold of the slow measuring passes
+  // Noise = idle min..max after removing slow drift and the 2 highest and 2 lowest samples.
+  #define PAD_NOISE_MAX       1500 // Max idle noise; more = homing fails (before descent, after back-off)
+  #define PAD_COARSE_TRIGGER 4000  // Contact threshold of the first descent
+  #define PAD_FINE_TRIGGER   3000  // Contact threshold of the slow measuring passes (>= 2 x PAD_NOISE_MAX)
   // Touch at print temperature: targets already set (nozzle >= 50 °C, bed >= 30 °C, e.g. by the
   // start G-code before G28) are used, otherwise these defaults. Both are waited for, then restored.
   #define PAD_HOME_NOZZLE_TEMP 220 // (°C) Default nozzle temperature. 0 = touch cold, no heating at all.

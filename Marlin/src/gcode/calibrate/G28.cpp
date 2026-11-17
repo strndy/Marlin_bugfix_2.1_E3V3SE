@@ -272,6 +272,10 @@ void GcodeSuite::G28() {
     return;
   }
 
+  #if ENABLED(PAD_Z_HOMING)
+    bool pad_z_ok = true; // false: pad Z homing failed, Z unhomed. No more Z moves, no after-homing G-code.
+  #endif
+
   #if ENABLED(FULL_REPORT_TO_HOST_FEATURE)
     const M_StateEnum old_grblstate = motion.M_State_grbl;
     motion.set_and_report_grblstate(M_HOMING);
@@ -495,7 +499,7 @@ void GcodeSuite::G28() {
             #endif
 
             #if ENABLED(PAD_Z_HOMING)
-              pad_home_z(); // Nozzle touch on the strain-gauge pad. Never uses the probe.
+              pad_z_ok = pad_home_z(); // Nozzle touch on the strain-gauge pad. Never uses the probe.
             #elif ENABLED(Z_SAFE_HOMING)
               // H means hold the current X/Y position when probing.
               // Otherwise move to the define safe X/Y position before homing Z.
@@ -508,7 +512,7 @@ void GcodeSuite::G28() {
             #endif
 
             #if ANY(Z_HOME_TO_MIN, ALLOW_Z_AFTER_HOMING)
-              finalRaiseZ = true;
+              finalRaiseZ = TERN1(PAD_Z_HOMING, pad_z_ok);
             #endif
           }
         #endif
@@ -567,7 +571,7 @@ void GcodeSuite::G28() {
     #endif
 
     #ifdef XY_AFTER_HOMING
-      if (!motion.axes_should_home(_BV(X_AXIS) | _BV(Y_AXIS)))
+      if (!motion.axes_should_home(_BV(X_AXIS) | _BV(Y_AXIS)) && TERN1(PAD_Z_HOMING, pad_z_ok))
         motion.blocking_move(xy_pos_t(XY_AFTER_HOMING));
     #endif
 
@@ -592,13 +596,13 @@ void GcodeSuite::G28() {
   TERN_(FULL_REPORT_TO_HOST_FEATURE, motion.set_and_report_grblstate(old_grblstate));
 
   #ifdef EVENT_GCODE_AFTER_HOMING
-    gcode.process_subcommands_now(F(EVENT_GCODE_AFTER_HOMING));
+    if (TERN1(PAD_Z_HOMING, pad_z_ok)) gcode.process_subcommands_now(F(EVENT_GCODE_AFTER_HOMING));
   #endif
 
   if(!HMI_flag.abort_end_flag)  TERN_(DWIN_CREALITY_LCD, DWIN_CompletedHoming());  //Return to zero completion flag
   
   home_flag = false;
   // rock_21211104, Prevent back to zero operation after automatic leveling.
-  HMI_flag.power_back_to_zero_flag = true;
+  HMI_flag.power_back_to_zero_flag = TERN1(PAD_Z_HOMING, pad_z_ok); // false: the LCD homes again before Move / mesh edit
 
 }

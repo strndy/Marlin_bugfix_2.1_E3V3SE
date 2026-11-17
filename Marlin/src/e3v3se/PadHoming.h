@@ -25,9 +25,11 @@
   #endif
 
   // Called by G28 in place of the probe-based Z homing, after X/Y are homed.
-  // On success Z is homed and the nozzle is about 1 mm above the pad (G28 then lifts it).
-  // On ANY failure it calls kill(): heaters off, printer halted until reset.
-  void pad_home_z();
+  // true: Z is homed and the nozzle is about 1 mm above the pad (G28 then lifts it).
+  // false: failed. The nozzle was lifted (at most 2 mm), heaters are off, Z is unhomed and
+  // reads 0, the error is on serial and the LCD, an SD print is being aborted and the host
+  // was told to cancel. G28 must then not move Z any further.
+  [[nodiscard]] bool pad_home_z();
 
   // Called by G28 before X/Y homing when Z will be homed: remembers the current targets and
   // starts heating to the touch temperatures (print temperature if set, else the defaults).
