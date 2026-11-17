@@ -482,10 +482,12 @@ template<uint8_t N>
 
   /**
    * One wipe segment: down to 'depth' below the rough contact (zs = 0) watching the load, then Y
-   * to y_end at that height (Y only moves while Z is at its target). Y and Z by direct stepping
-   * (stepper ISR idle, nothing queued). y_moved: Y steps done, not yet in motion.position.
-   * ended: the wipe ended (hard limit / no relief), the nozzle is lifted to travel height.
-   * false = failed (pad_err set).
+   * to y_end at that height (Y only moves while Z is at its target). Y and Z are stepped directly
+   * *inside* the wait for each HX711 conversion, so the load is read at the full HX711 rate (~80/s)
+   * with the nozzle moving, and every sample can change the Z target for the very next steps.
+   * Nothing else blocks the loop (no idle(): only the heater task). Stepper ISR idle, nothing queued.
+   * y_moved: Y steps done, not yet in motion.position. ended: the wipe ended (hard limit / no
+   * relief), the nozzle is lifted to travel height. false = failed (pad_err set).
    */
   [[nodiscard]] static bool pad_wipe(const PadScrapeParams &p, const PadWipeCtl &c, const int32_t ref,
                                      const float depth, const float y_end, long &zs, long &y_moved, bool &ended) {
@@ -495,36 +497,51 @@ template<uint8_t N>
                fast_n = pad_steps(COARSE_STEP_MM), slow_n = pad_steps(WIPE_DOWN_MM);
     const bool fwd = y_total > 0;
     long y_left = ABS(y_total), target = _MAX(c.floor, -pad_steps(depth));
-    const uint32_t y_us = _MAX(50UL, uint32_t(1000000.0f / (spm_y * p.speed)));
-    const millis_t limit = millis() + SEC_TO_MS(20) + millis_t(3000.0f * ABS(y_end - y_now) / p.speed);
+    const uint32_t y_us = _MAX(50UL, uint32_t(1000000.0f / (spm_y * p.speed))),
+                   z_us = _MAX(20UL, uint32_t(1000000.0f / (spm * Z_SPEED_MM_S)));
+    const millis_t start = millis(), limit = start + SEC_TO_MS(20) + millis_t(3000.0f * ABS(y_end - y_now) / p.speed);
 
     int32_t fmin = INT32_MAX, fmax = 0;
     int64_t fsum = 0;
-    uint32_t n = 0, samples = 0;
+    uint32_t samples = 0, below = 0;                   // all samples / taken below the rough contact
+    long y_at_depth = 0;                               // Y steps done with Z at its target
     uint16_t jumps = 0;
     uint8_t quiet = 0;
     FSTR_P err = nullptr;
 
-    const bool old_dir = Y_DIR_READ();
+    const bool old_ydir = Y_DIR_READ(), old_zdir = Z_DIR_READ();
     Y_DIR_WRITE(fwd);
+    bool z_up = false;
+    Z_DIR_WRITE(false);
     DELAY_US(100);
-    uint32_t next_us = micros();
+    uint32_t next_y = micros(), next_z = next_y;
     for (;;) {
-      // Step Y while the HX711 converts (~12.5 ms per sample), only with Z at its target
-      const bool y_go = y_left && zs == target;
+      // Z goal until the next sample: up at once (a jump), down one checked step per sample (slow near the contact)
+      const long z_goal = target >= zs ? target : _MAX(target, zs - (zs > near_n ? fast_n : slow_n));
+      // Step Z towards the goal and Y (only with Z at its target) while the HX711 converts
       const millis_t t0 = millis();
       while (READ(HX711_SDO_PIN)) {
         if (millis() - t0 > HX711_TIMEOUT_MS) { err = F("HX711 no data"); break; }
-        if (y_go && y_left) {
-          const uint32_t now = micros();
-          if (int32_t(now - next_us) >= 0) {
-            Y_STEP_WRITE(STEP_STATE_Y);
+        const uint32_t now = micros();
+        if (zs != z_goal) {
+          const bool up = z_goal > zs;
+          if (up != z_up) { Z_DIR_WRITE(up); z_up = up; DELAY_US(20); }
+          if (int32_t(now - next_z) >= 0) {
+            Z_STEP_WRITE(STEP_STATE_Z);
             DELAY_US(2);
-            Y_STEP_WRITE(!STEP_STATE_Y);
-            --y_left;
-            y_moved += fwd ? 1 : -1;
-            next_us = now + y_us;                      // from now: no catch-up burst after a pause
+            Z_STEP_WRITE(!STEP_STATE_Z);
+            zs += up ? 1 : -1;
+            next_z = now + z_us;
           }
+        }
+        else if (y_left && zs == target && int32_t(now - next_y) >= 0) {
+          Y_STEP_WRITE(STEP_STATE_Y);
+          DELAY_US(2);
+          Y_STEP_WRITE(!STEP_STATE_Y);
+          --y_left;
+          ++y_at_depth;
+          y_moved += fwd ? 1 : -1;
+          next_y = now + y_us;                         // from now: no catch-up burst after a pause
         }
         hal.watchdog_refresh();
       }
@@ -532,9 +549,11 @@ template<uint8_t N>
       if (err || (err = pad_read(v))) break;
       const int32_t f = pad_abs(v - ref);
       ++samples;
-      if (zs <= 0) { NOMORE(fmin, f); NOLESS(fmax, f); fsum += f; ++n; }   // load while below the contact
+      NOMORE(fmin, f); NOLESS(fmax, f); fsum += f;
+      if (zs <= 0) ++below;
       const PadWipeStep st = pad_wipe_control(c, f, target, quiet);
       if (st == WIPE_END) {
+        Z_DIR_WRITE(old_zdir);                         // pad_step_z sets and restores DIR itself
         pad_z_to(zs, pad_steps(TRAVEL_MM));            // lift at once, then report
         SERIAL_ECHOPGM("PAD_SCRAPE: load ", f);
         SERIAL_ECHO(f > c.hard ? F(" over the hard limit") : F(" still over the soft limit at the lift limit"));
@@ -544,20 +563,20 @@ template<uint8_t N>
       }
       if (st == WIPE_JUMP) ++jumps;
       if (!y_left && zs == target) break;              // segment done
-      // Z toward the target: up at once, down one checked step per sample (slow near the contact)
-      if (target > zs) pad_z_to(zs, target);
-      else if (target < zs) pad_z_to(zs, _MAX(target, zs - (zs > near_n ? fast_n : slow_n)));
       if (!pad_check(0)) break;                        // pad_err set
       if (ELAPSED(millis(), limit)) { err = F("wipe timeout"); break; }
-      if ((samples & 7) == 0) marlin.idle_no_sleep();  // heaters, LCD; Y waits meanwhile
+      if ((samples & 7) == 0) thermalManager.task();   // heaters only: idle() (LCD) would stall the loop
     }
-    Y_DIR_WRITE(old_dir);
+    const millis_t took = millis() - start;
+    Y_DIR_WRITE(old_ydir);
+    Z_DIR_WRITE(old_zdir);
     DELAY_US(100);
 
     SERIAL_ECHOPGM("PAD_SCRAPE: wipe Y", p_float_t(y_now, 1), "->", p_float_t(motion.position.y + float(y_moved) / spm_y, 1),
-                   " at contact-", p_float_t(depth, 2), " mm: samples=", n);
-    if (n) SERIAL_ECHOPGM(" load min/avg/max=", fmin, "/", int32_t(fsum / int64_t(n)), "/", fmax);
-    SERIAL_ECHOLNPGM(" (~100 counts/g; soft ", c.soft, " hard ", c.hard, ") jumps=", jumps);
+                   " at contact-", p_float_t(depth, 2), " mm: ", took, " ms, samples=", samples,
+                   " (", below, " under the contact, ", p_float_t(float(y_at_depth) / spm_y, 1), " mm wiped)");
+    if (samples) SERIAL_ECHOPGM(" load min/avg/max=", fmin, "/", int32_t(fsum / int64_t(samples)), "/", fmax);
+    SERIAL_ECHOLNPGM(" (~100 counts/g; soft ", c.soft, " hard ", c.hard, ") jumps=", jumps, ", ends ", p_float_t(float(zs) / spm, 3), " mm from the contact");
     if (err) return pad_fail(err);
     return !pad_err;
   }
