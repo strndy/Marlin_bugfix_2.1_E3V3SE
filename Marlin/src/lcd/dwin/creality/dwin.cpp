@@ -145,7 +145,18 @@ constexpr uint16_t TROWS = 6, MROWS = TROWS - 1, // Total rows, and other-than-B
 #endif
 
 #define font_offset 19
-#define BABY_Z_VAR TERN(HAS_BED_PROBE, probe.offset.z, dwin_zoffset)
+#if ENABLED(PAD_Z_HOMING)
+  // Pad Z homing: Z0 is the pad contact + M206 Z, so the LCD Z-offset is M206 Z, shown with the probe
+  // offset's sign (more negative = nozzle closer to the bed). Limited to the +-1 mm pad homing accepts.
+  // The probe Z offset (M851 Z) is not shown: G29 makes the mesh 0 at the pad, so it cancels out.
+  #define BABY_Z_VAR (-motion.home_offset.z)
+  #define LCD_ZOFF_MIN (-1)
+  #define LCD_ZOFF_MAX 1
+#else
+  #define BABY_Z_VAR TERN(HAS_BED_PROBE, probe.offset.z, dwin_zoffset)
+  #define LCD_ZOFF_MIN (PROBE_OFFSET_ZMIN)
+  #define LCD_ZOFF_MAX (PROBE_OFFSET_ZMAX)
+#endif
 
 char shift_name[101];
 char current_file_name[30];
@@ -1772,7 +1783,7 @@ void Item_Prepare_Offset(const uint8_t row)
 #elif ENABLED(DWIN_CREALITY_320_LCD)
     DWIN_ICON_Show(HMI_flag.language, LANGUAGE_Zoffset, 42, MBASE(row) + JPN_OFFSET);
 #endif
-    DWIN_Draw_Signed_Float(font8x16, Color_Bg_Black, 2, 2, VALUERANGE_X - 14, MBASE(row), probe.offset.z * 100);
+    DWIN_Draw_Signed_Float(font8x16, Color_Bg_Black, 2, 2, VALUERANGE_X - 14, MBASE(row), BABY_Z_VAR * 100);
 #else
     DWIN_Frame_AreaCopy(1, 43, 89, 98, 101, LBLX, MBASE(row));
 #endif
@@ -1781,11 +1792,11 @@ void Item_Prepare_Offset(const uint8_t row)
   {
 #if HAS_BED_PROBE
 #ifdef USE_STRING_TITLES
-    DWIN_Draw_Label(MBASE(row), GET_TEXT_F(MSG_ZPROBE_ZOFFSET));
+    DWIN_Draw_Label(MBASE(row), GET_TEXT_F(TERN(PAD_Z_HOMING, MSG_HOME_OFFSET_Z, MSG_ZPROBE_ZOFFSET)));
 #else
     DWIN_Frame_AreaCopy(1, 93, 179, 141, 189, LBLX, MBASE(row)); // "with offset"
 #endif
-    DWIN_Draw_Signed_Float(font8x16, Color_Bg_Black, 2, 2, VALUERANGE_X - 14, MBASE(row), probe.offset.z * 100);
+    DWIN_Draw_Signed_Float(font8x16, Color_Bg_Black, 2, 2, VALUERANGE_X - 14, MBASE(row), BABY_Z_VAR * 100);
 #else
 #ifdef USE_STRING_TITLES
     DWIN_Draw_Label(MBASE(row), GET_TEXT_F(MSG_SET_HOME_OFFSETS));
@@ -4111,11 +4122,14 @@ void HMI_Zoffset()
     }
     if (Apply_Encoder(encoder_diffState, HMI_ValueStruct.offset_value))
     {
-      LIMIT(HMI_ValueStruct.offset_value, (PROBE_OFFSET_ZMIN) * 100, (PROBE_OFFSET_ZMAX) * 100);
+      LIMIT(HMI_ValueStruct.offset_value, (LCD_ZOFF_MIN) * 100, (LCD_ZOFF_MAX) * 100);
       last_zoffset = dwin_zoffset;
       dwin_zoffset = HMI_ValueStruct.offset_value / 100.0f; // Rock 20210726
       EncoderRate.enabled = false;
-#if HAS_BED_PROBE
+#if ENABLED(PAD_Z_HOMING)
+      motion.set_home_offset(Z_AXIS, -dwin_zoffset);   // M206 Z: applied by the next G28 (babystepped live meanwhile)
+      TERN_(EEPROM_SETTINGS, settings.save());
+#elif HAS_BED_PROBE
       probe.offset.z = dwin_zoffset;
       // millis_t start = millis();
       TERN_(EEPROM_SETTINGS, settings.save());
@@ -4137,10 +4151,10 @@ void HMI_Zoffset()
       DWIN_UpdateLCD();
       return;
     }
-    LIMIT(HMI_ValueStruct.offset_value, (PROBE_OFFSET_ZMIN) * 100, (PROBE_OFFSET_ZMAX) * 100);
+    LIMIT(HMI_ValueStruct.offset_value, (LCD_ZOFF_MIN) * 100, (LCD_ZOFF_MAX) * 100);
     last_zoffset = dwin_zoffset;
     dwin_zoffset = HMI_ValueStruct.offset_value / 100.0f;
-#if ANY(BABYSTEP_ZPROBE_OFFSET, JUST_BABYSTEP)
+#if ANY(BABYSTEP_ZPROBE_OFFSET, JUST_BABYSTEP, PAD_Z_HOMING)
     // if (BABYSTEP_ALLOWED()) babystep.add_mm(Z_AXIS, dwin_zoffset -last_zoffset);   //rock_20220214
     // serialprintPGM("d:babystep\n");
     babystep.add_mm(Z_AXIS, dwin_zoffset - last_zoffset);
@@ -13367,7 +13381,7 @@ void DWIN_Show_M117(char *str)
 void DWIN_CompletedHoming()
 {
   HMI_flag.home_flag = false;
-  dwin_zoffset = TERN0(HAS_BED_PROBE, probe.offset.z);
+  dwin_zoffset = TERN(PAD_Z_HOMING, BABY_Z_VAR, TERN0(HAS_BED_PROBE, probe.offset.z));
   // Print log("checkkey:",checkkey);
   if (checkkey == Last_Prepare)
   {
@@ -13409,7 +13423,7 @@ void DWIN_CompletedHeight()
 {
   HMI_flag.home_flag = false;
   checkkey = Prepare;
-  dwin_zoffset = TERN0(HAS_BED_PROBE, probe.offset.z);
+  dwin_zoffset = TERN(PAD_Z_HOMING, BABY_Z_VAR, TERN0(HAS_BED_PROBE, probe.offset.z));
   Draw_Prepare_Menu();
   DWIN_UpdateLCD();
 }

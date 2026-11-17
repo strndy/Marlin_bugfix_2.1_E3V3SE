@@ -39,13 +39,6 @@
   // starts heating to the touch temperatures (print temperature if set, else the defaults).
   void pad_preheat();
 
-  #if ENABLED(PAD_SCRAPE)
-    // G28 after a successful pad_home_z(): true = the wipe sequence ran, so G28 ends with
-    // pad_scrape_end_move() (X/Y PAD_SCRAPE_END_*, then down to PAD_SCRAPE_END_Z) instead of the Z raise.
-    bool pad_scrape_done();
-    void pad_scrape_end_move();
-  #endif
-
   // M8015 T[seconds]: print live HX711 readings without moving anything.
   void pad_sensor_report(const uint8_t seconds);
 

@@ -2520,7 +2520,7 @@
   // PAD_SCRAPE_Y0 and PAD_SCRAPE_Y1 holding the load at PAD_SCRAPE_FORCE +- PAD_SCRAPE_BAND (live
   // HX711 control of Z, never deeper than PAD_SCRAPE_DEPTH below the contact; over
   // PAD_SCRAPE_FORCE_MAX: lift, wipe ended), flicks off the strip to PAD_SCRAPE_FLICK_X, lifts there,
-  // homes precisely on the pad at once and goes to the print start point PAD_SCRAPE_END_X/Y/Z.
+  // and homes precisely on the pad at once.
   // M8016 runs the rough touch and the wipe alone. Loads in HX711 counts (~100 per gram).
   //#define PAD_SCRAPE
   #if ENABLED(PAD_SCRAPE)
@@ -2540,9 +2540,6 @@
     #define PAD_SCRAPE_FLICK_X   -11     // (mm) Flick off the strip edge to here at the end, then lift (comment out: no flick)
     #define PAD_SCRAPE_TRIGGER  2500     // Contact threshold of the rough touch on the strip
     #define PAD_SCRAPE_RETRACT     2     // (mm) Filament pulled back before the first touch (logical E unchanged)
-    #define PAD_SCRAPE_END_X       0     // (mm) G28 ends here (the print start point) instead of raising Z,
-    #define PAD_SCRAPE_END_Y       0     //      reached at travel height, then lowered to PAD_SCRAPE_END_Z
-    #define PAD_SCRAPE_END_Z     0.1
   #endif
 #endif
 

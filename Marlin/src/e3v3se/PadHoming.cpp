@@ -472,8 +472,6 @@ template<uint8_t N>
     static_assert(PAD_SCRAPE_FLICK_X >= X_MIN_POS && PAD_SCRAPE_FLICK_X < PAD_SCRAPE_X, "PAD_SCRAPE_FLICK_X must be in X_MIN_POS..PAD_SCRAPE_X.");
   #endif
   static_assert(PAD_SCRAPE_RETRACT >= 0 && PAD_SCRAPE_RETRACT <= 10, "PAD_SCRAPE_RETRACT must be 0..10 mm.");
-  static_assert(WITHIN(PAD_SCRAPE_END_X, X_MIN_POS, X_MAX_POS) && WITHIN(PAD_SCRAPE_END_Y, Y_MIN_POS, Y_MAX_POS)
-             && PAD_SCRAPE_END_Z >= 0 && PAD_SCRAPE_END_Z <= 50, "PAD_SCRAPE_END_X/Y/Z are out of range.");
 
   PadScrapeParams pad_scrape_defaults() {
     PadScrapeParams p;
@@ -922,19 +920,6 @@ void pad_sensor_report(const uint8_t seconds) {
 }
 
 #if ENABLED(PAD_SCRAPE)
-
-  bool pad_scrape_done() { return pad_scraped; }
-
-  // End of the wipe + homing sequence: the print start point, reached from travel height (leveling as G28 left it)
-  void pad_scrape_end_move() {
-    const feedRate_t fz = motion.homing_feedrate(Z_AXIS);
-    motion.blocking_move_z(_MAX(motion.position.z, motion.logical_to_native(TRAVEL_MM, Z_AXIS)), fz);
-    motion.blocking_move_xy(motion.logical_to_native(PAD_SCRAPE_END_X, X_AXIS), motion.logical_to_native(PAD_SCRAPE_END_Y, Y_AXIS),
-                            motion.homing_feedrate(X_AXIS));
-    motion.blocking_move_z(motion.logical_to_native(PAD_SCRAPE_END_Z, Z_AXIS), fz);
-    planner.synchronize();
-    SERIAL_ECHOLNPGM("PAD_SCRAPE: at the start point X", PAD_SCRAPE_END_X, " Y", PAD_SCRAPE_END_Y, " Z", PAD_SCRAPE_END_Z);
-  }
 
   // M8016: rough touch + wipe alone, for tuning. Z homed; leveling off meanwhile; X/Y/Z stay exact.
   void pad_scrape_only(const PadScrapeParams &p) {

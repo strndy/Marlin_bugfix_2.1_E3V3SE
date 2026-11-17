@@ -512,7 +512,7 @@ void GcodeSuite::G28() {
             #endif
 
             #if ANY(Z_HOME_TO_MIN, ALLOW_Z_AFTER_HOMING)
-              finalRaiseZ = TERN1(PAD_Z_HOMING, pad_z_ok) && !TERN0(PAD_SCRAPE, pad_scrape_done()); // wipe sequence: end move below
+              finalRaiseZ = TERN1(PAD_Z_HOMING, pad_z_ok);
             #endif
           }
         #endif
@@ -564,9 +564,6 @@ void GcodeSuite::G28() {
     #endif
 
     TERN_(CAN_SET_LEVELING_AFTER_G28, if (leveling_restore_state) set_bed_leveling_enabled());
-
-    // Pad Z homing with the nozzle wipe: end at the print start point (PAD_SCRAPE_END_X/Y/Z)
-    TERN_(PAD_SCRAPE, if (doZ && pad_z_ok && pad_scrape_done()) pad_scrape_end_move());
 
     // Restore the active tool after homing
     #if HAS_MULTI_HOTEND && (DISABLED(DELTA) || ENABLED(DELTA_HOME_TO_SAFE_ZONE))
