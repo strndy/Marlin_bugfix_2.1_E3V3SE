@@ -446,32 +446,47 @@ template<uint8_t N>
   constexpr float TRAVEL_MM         = 5,      // travel height above the highest contact known
                   SCRAPE_SEARCH_MM  = 1,      // M8016 rough descent: no contact this far below the expected height = skip
                   SCRAPE_FLOOR_MM   = 0.4f,   // never deeper than this below the strip contact
-                  SCRAPE_CEIL_MM    = 1,      // jumped up this far over the contact and still loaded: end the wipe
-                  WIPE_NEAR_MM      = 0.3f,   // the descent to the wipe depth slows down from here over the contact
+                  SCRAPE_CEIL_MM    = 1,      // up this far over the contact and still over the band: end the wipe
+                  WIPE_NEAR_MM      = 0.3f,   // the approach to the wipe depth slows down from here over the contact
                   WIPE_DOWN_MM      = 0.01f,  // ... to this per HX711 sample
+                  WIPE_V0_MM_S      = 5,      // feed start/stop speed (under the X/Y jerk)
+                  WIPE_ACCEL        = 2000,   // feed acceleration (mm/s^2)
                   PRECISE_MARGIN_MM = 2;      // precise descent: no pad contact this far below the strip height = fail
   // Free reading at the wipe start vs the baseline before the rough touch: catches a reference taken while
   // loaded; allows the drift of an unsoaked bed over the ~10 s between them (up to ~300 counts/s)
   constexpr int32_t SCRAPE_REF_TOL = 2 * (PAD_COARSE_TRIGGER);
 
-  static_assert(PAD_SCRAPE_X >= X_MIN_POS && PAD_SCRAPE_X <= X_MAX_POS, "PAD_SCRAPE_X is out of the X range.");
+  static_assert(WITHIN(PAD_SCRAPE_X, X_MIN_POS, X_MAX_POS) && WITHIN(PAD_SCRAPE_PARK_X, X_MIN_POS, X_MAX_POS), "PAD_SCRAPE_X/PARK_X are out of the X range.");
   static_assert(WITHIN(PAD_SCRAPE_ROUGH_Y, Y_MIN_POS, Y_MAX_POS) && WITHIN(PAD_SCRAPE_Y0, Y_MIN_POS, Y_MAX_POS)
-             && WITHIN(PAD_SCRAPE_YMID, Y_MIN_POS, Y_MAX_POS) && WITHIN(PAD_SCRAPE_Y1, Y_MIN_POS, Y_MAX_POS), "PAD_SCRAPE_*Y* are out of the Y range.");
-  static_assert((PAD_SCRAPE_YMID - PAD_SCRAPE_Y0) * (PAD_SCRAPE_Y1 - PAD_SCRAPE_YMID) > 0, "PAD_SCRAPE_YMID must lie between PAD_SCRAPE_Y0 and PAD_SCRAPE_Y1.");
+             && WITHIN(PAD_SCRAPE_Y1, Y_MIN_POS, Y_MAX_POS) && WITHIN(PAD_SCRAPE_PARK_Y, Y_MIN_POS, Y_MAX_POS), "PAD_SCRAPE_*Y are out of the Y range.");
+  static_assert(ABS((PAD_SCRAPE_Y1) - (PAD_SCRAPE_Y0)) >= 5, "PAD_SCRAPE_Y0..Y1 must be at least 5 mm long.");
   static_assert(ABS((AUTOZ_TOOL_X) - (PAD_SCRAPE_X)) >= 20, "The pad spot must be at least 20 mm from the scrape strip.");
-  static_assert(PAD_SCRAPE_TRIGGER > PAD_NOISE_MAX && PAD_SCRAPE_TRIGGER < PAD_SCRAPE_SOFT, "Need PAD_NOISE_MAX < PAD_SCRAPE_TRIGGER < PAD_SCRAPE_SOFT.");
-  static_assert(PAD_SCRAPE_SOFT < PAD_SCRAPE_FORCE_MAX && PAD_SCRAPE_FORCE_MAX <= 60000, "Need PAD_SCRAPE_SOFT < PAD_SCRAPE_FORCE_MAX <= 60000.");
-  static_assert(PAD_SCRAPE_DEPTH1 >= 0 && PAD_SCRAPE_DEPTH1 <= SCRAPE_FLOOR_MM && PAD_SCRAPE_DEPTH2 >= 0 && PAD_SCRAPE_DEPTH2 <= SCRAPE_FLOOR_MM,
-                "PAD_SCRAPE_DEPTH1/2 must be 0..0.4 mm.");
-  static_assert(PAD_SCRAPE_JUMP >= 0.02 && PAD_SCRAPE_JUMP <= 0.5, "PAD_SCRAPE_JUMP must be 0.02..0.5 mm.");
+  static_assert(PAD_SCRAPE_PASSES >= 1 && PAD_SCRAPE_PASSES <= 20, "PAD_SCRAPE_PASSES must be 1..20.");
+  static_assert(PAD_SCRAPE_SPEED >= 1 && PAD_SCRAPE_SPEED <= 50, "PAD_SCRAPE_SPEED must be 1..50 mm/s.");
+  static_assert(PAD_SCRAPE_TRIGGER > PAD_NOISE_MAX, "Need PAD_SCRAPE_TRIGGER > PAD_NOISE_MAX.");
+  static_assert(PAD_SCRAPE_BAND > PAD_NOISE_MAX && PAD_SCRAPE_FORCE > PAD_SCRAPE_BAND
+             && PAD_SCRAPE_FORCE + PAD_SCRAPE_BAND < PAD_SCRAPE_FORCE_MAX && PAD_SCRAPE_FORCE_MAX <= 60000,
+                "Need PAD_NOISE_MAX < PAD_SCRAPE_BAND < PAD_SCRAPE_FORCE, PAD_SCRAPE_FORCE + PAD_SCRAPE_BAND < PAD_SCRAPE_FORCE_MAX <= 60000.");
+  static_assert(PAD_SCRAPE_DEPTH >= 0 && PAD_SCRAPE_DEPTH <= SCRAPE_FLOOR_MM, "PAD_SCRAPE_DEPTH must be 0..0.4 mm.");
+  #ifdef PAD_SCRAPE_FLICK_X
+    static_assert(PAD_SCRAPE_FLICK_X >= X_MIN_POS && PAD_SCRAPE_FLICK_X < PAD_SCRAPE_X, "PAD_SCRAPE_FLICK_X must be in X_MIN_POS..PAD_SCRAPE_X.");
+  #endif
   static_assert(PAD_SCRAPE_RETRACT >= 0 && PAD_SCRAPE_RETRACT <= 10, "PAD_SCRAPE_RETRACT must be 0..10 mm.");
   static_assert(WITHIN(PAD_SCRAPE_END_X, X_MIN_POS, X_MAX_POS) && WITHIN(PAD_SCRAPE_END_Y, Y_MIN_POS, Y_MAX_POS)
              && PAD_SCRAPE_END_Z >= 0 && PAD_SCRAPE_END_Z <= 50, "PAD_SCRAPE_END_X/Y/Z are out of range.");
 
   PadScrapeParams pad_scrape_defaults() {
-    return { float(PAD_SCRAPE_X), float(PAD_SCRAPE_ROUGH_Y), float(PAD_SCRAPE_Y0), float(PAD_SCRAPE_YMID), float(PAD_SCRAPE_Y1),
-             float(PAD_SCRAPE_DEPTH1), float(PAD_SCRAPE_DEPTH2), float(PAD_SCRAPE_JUMP), 5.0f, 0.0f,
-             int32_t(PAD_SCRAPE_SOFT), int32_t(PAD_SCRAPE_FORCE_MAX) };
+    PadScrapeParams p;
+    p.x = PAD_SCRAPE_X; p.rough_y = PAD_SCRAPE_ROUGH_Y; p.y0 = PAD_SCRAPE_Y0; p.y1 = PAD_SCRAPE_Y1;
+    p.depth = PAD_SCRAPE_DEPTH; p.speed = PAD_SCRAPE_SPEED; p.contact = 0;
+    #ifdef PAD_SCRAPE_FLICK_X
+      p.flick_x = PAD_SCRAPE_FLICK_X;
+    #else
+      p.flick_x = PAD_SCRAPE_X;                        // = x: no flick
+    #endif
+    p.target = PAD_SCRAPE_FORCE; p.band = PAD_SCRAPE_BAND; p.hard = PAD_SCRAPE_FORCE_MAX;
+    p.passes = PAD_SCRAPE_PASSES;
+    return p;
   }
 
   // Direct-step Z to height 'to' (steps). zs is the height now, in the same frame.
@@ -481,111 +496,112 @@ template<uint8_t N>
   }
 
   /**
-   * One wipe segment: down to 'depth' below the rough contact (zs = 0) watching the load, then Y
-   * to y_end at that height (Y only moves while Z is at its target). Y and Z are stepped directly
-   * *inside* the wait for each HX711 conversion, so the load is read at the full HX711 rate (~80/s)
-   * with the nozzle moving, and every sample can change the Z target for the very next steps.
-   * Nothing else blocks the loop (no idle(): only the heater task). Stepper ISR idle, nothing queued.
-   * y_moved: Y steps done, not yet in motion.position. ended: the wipe ended (hard limit / no
-   * relief), the nozzle is lifted to travel height. false = failed (pad_err set).
+   * One wipe pass along X or Y to 'to', at the load the control holds (Z between the depth and
+   * the lift limit). Z and the feed axis are stepped directly *inside* the wait for each HX711
+   * conversion, so the load is read at the full HX711 rate (~80/s) while moving, and every sample
+   * sets Z and the feed for the very next steps. The feed accelerates from WIPE_V0_MM_S at
+   * WIPE_ACCEL and slows down again for the end and whenever the control stops it. Nothing else
+   * blocks the loop (only the heater task runs). Stepper ISR idle, nothing queued.
+   * moved: steps done on that axis, not yet in motion.position. ended: the wipe ended (hard limit,
+   * no relief); the nozzle is lifted to travel height. false = failed (pad_err set).
    */
-  [[nodiscard]] static bool pad_wipe(const PadScrapeParams &p, const PadWipeCtl &c, const int32_t ref,
-                                     const float depth, const float y_end, long &zs, long &y_moved, bool &ended) {
-    const float spm = pad_spm(), spm_y = planner.settings.axis_steps_per_mm[Y_AXIS],
-                y_now = motion.position.y + float(y_moved) / spm_y;
-    const long y_total = lroundf((y_end - y_now) * spm_y), near_n = pad_steps(WIPE_NEAR_MM),
-               fast_n = pad_steps(COARSE_STEP_MM), slow_n = pad_steps(WIPE_DOWN_MM);
-    const bool fwd = y_total > 0;
-    long y_left = ABS(y_total), target = _MAX(c.floor, -pad_steps(depth));
-    const uint32_t y_us = _MAX(50UL, uint32_t(1000000.0f / (spm_y * p.speed))),
-                   z_us = _MAX(20UL, uint32_t(1000000.0f / (spm * Z_SPEED_MM_S)));
-    const millis_t start = millis(), limit = start + SEC_TO_MS(20) + millis_t(3000.0f * ABS(y_end - y_now) / p.speed);
+  [[nodiscard]] static bool pad_wipe_pass(const PadScrapeParams &p, const PadWipeCtl &c, const int32_t ref, const uint8_t pass,
+                                          const AxisEnum axis, const float to, long &zs, long &moved, bool &ended) {
+    const bool is_x = axis == X_AXIS;
+    const float spm = pad_spm(), spm_a = planner.settings.axis_steps_per_mm[axis],
+                from = motion.position[axis] + float(moved) / spm_a;
+    const long total = lroundf((to - from) * spm_a);
+    const bool fwd = total > 0;
+    long left = ABS(total);
+    const uint32_t z_us = _MAX(20UL, uint32_t(1000000.0f / (spm * Z_SPEED_MM_S)));
+    const float vmax = _MAX(p.speed, float(WIPE_V0_MM_S)), dv2 = 2.0f * WIPE_ACCEL / spm_a;   // v^2 change per step
+    const millis_t start = millis(), limit = start + SEC_TO_MS(20) + millis_t(5000.0f * ABS(to - from) / WIPE_V0_MM_S);
 
     int32_t fmin = INT32_MAX, fmax = 0;
     int64_t fsum = 0;
-    uint32_t samples = 0, below = 0;                   // all samples / taken below the rough contact
-    long y_at_depth = 0;                               // Y steps done with Z at its target
-    uint16_t jumps = 0;
-    uint8_t quiet = 0;
+    uint32_t samples = 0, in_band = 0, below = 0;
+    long fed = 0;
     FSTR_P err = nullptr;
 
-    const bool old_ydir = Y_DIR_READ(), old_zdir = Z_DIR_READ();
-    Y_DIR_WRITE(fwd);
+    const bool old_adir = is_x ? X_DIR_READ() : Y_DIR_READ(), old_zdir = Z_DIR_READ();
+    if (is_x) X_DIR_WRITE(fwd); else Y_DIR_WRITE(fwd);
     bool z_up = false;
     Z_DIR_WRITE(false);
     DELAY_US(100);
-    uint32_t next_y = micros(), next_z = next_y;
+    uint32_t next_a = micros(), next_z = next_a;
+    float v = 0;                                       // feed speed now (0 = stopped)
+    long z_goal = zs;
+    bool feed = false, band = false;
     for (;;) {
-      // Z goal until the next sample: up at once (a jump), down one checked step per sample (slow near the contact)
-      const long z_goal = target >= zs ? target : _MAX(target, zs - (zs > near_n ? fast_n : slow_n));
-      // Step Z towards the goal and Y (only with Z at its target) while the HX711 converts
+      // Step Z towards the goal and the feed axis while the HX711 converts
       const millis_t t0 = millis();
       while (READ(HX711_SDO_PIN)) {
         if (millis() - t0 > HX711_TIMEOUT_MS) { err = F("HX711 no data"); break; }
         const uint32_t now = micros();
-        if (zs != z_goal) {
+        if (zs != z_goal && int32_t(now - next_z) >= 0) {
           const bool up = z_goal > zs;
           if (up != z_up) { Z_DIR_WRITE(up); z_up = up; DELAY_US(20); }
-          if (int32_t(now - next_z) >= 0) {
-            Z_STEP_WRITE(STEP_STATE_Z);
-            DELAY_US(2);
-            Z_STEP_WRITE(!STEP_STATE_Z);
-            zs += up ? 1 : -1;
-            next_z = now + z_us;
-          }
-        }
-        else if (y_left && zs == target && int32_t(now - next_y) >= 0) {
-          Y_STEP_WRITE(STEP_STATE_Y);
+          Z_STEP_WRITE(STEP_STATE_Z);
           DELAY_US(2);
-          Y_STEP_WRITE(!STEP_STATE_Y);
-          --y_left;
-          ++y_at_depth;
-          y_moved += fwd ? 1 : -1;
-          next_y = now + y_us;                         // from now: no catch-up burst after a pause
+          Z_STEP_WRITE(!STEP_STATE_Z);
+          zs += up ? 1 : -1;
+          next_z = now + z_us;
+        }
+        if (left && int32_t(now - next_a) >= 0) {
+          // Speed for this step: up to vmax, down to stop for the end of the pass or when the feed is off
+          v = pad_feed_speed(v, feed, left, vmax, float(WIPE_V0_MM_S), dv2, [](const float x) { return SQRT(x); });
+          if (v > 0) {
+            if (is_x) { X_STEP_WRITE(STEP_STATE_X); DELAY_US(2); X_STEP_WRITE(!STEP_STATE_X); }
+            else      { Y_STEP_WRITE(STEP_STATE_Y); DELAY_US(2); Y_STEP_WRITE(!STEP_STATE_Y); }
+            --left;
+            ++fed;
+            moved += fwd ? 1 : -1;
+            next_a = now + uint32_t(1000000.0f / (v * spm_a));
+          }
+          else
+            next_a = now + 1000;                       // stopped: look again in 1 ms
         }
         hal.watchdog_refresh();
       }
-      int32_t v;
-      if (err || (err = pad_read(v))) break;
-      const int32_t f = pad_abs(v - ref);
+      int32_t val;
+      if (err || (err = pad_read(val))) break;
+      const int32_t f = pad_abs(val - ref);
       ++samples;
       NOMORE(fmin, f); NOLESS(fmax, f); fsum += f;
       if (zs <= 0) ++below;
-      const PadWipeStep st = pad_wipe_control(c, f, target, quiet);
-      if (st == WIPE_END) {
+      if (pad_wipe_control(c, f, zs, z_goal, feed, band) == WIPE_END) {
         Z_DIR_WRITE(old_zdir);                         // pad_step_z sets and restores DIR itself
         pad_z_to(zs, pad_steps(TRAVEL_MM));            // lift at once, then report
         SERIAL_ECHOPGM("PAD_SCRAPE: load ", f);
-        SERIAL_ECHO(f > c.hard ? F(" over the hard limit") : F(" still over the soft limit at the lift limit"));
+        SERIAL_ECHO(f > c.hard ? F(" over the hard limit") : F(" still over the band at the lift limit"));
         SERIAL_ECHOLNPGM(" (hard ", c.hard, "): lifted, wipe ended");
         ended = true;
         break;
       }
-      if (st == WIPE_JUMP) ++jumps;
-      if (!y_left && zs == target) break;              // segment done
+      if (band) ++in_band;
+      if (!left) break;                                // pass done (Z keeps its height into the next one)
       if (!pad_check(0)) break;                        // pad_err set
       if (ELAPSED(millis(), limit)) { err = F("wipe timeout"); break; }
       if ((samples & 7) == 0) thermalManager.task();   // heaters only: idle() (LCD) would stall the loop
     }
     const millis_t took = millis() - start;
-    Y_DIR_WRITE(old_ydir);
+    if (is_x) X_DIR_WRITE(old_adir); else Y_DIR_WRITE(old_adir);
     Z_DIR_WRITE(old_zdir);
     DELAY_US(100);
 
-    SERIAL_ECHOPGM("PAD_SCRAPE: wipe Y", p_float_t(y_now, 1), "->", p_float_t(motion.position.y + float(y_moved) / spm_y, 1),
-                   " at contact-", p_float_t(depth, 2), " mm: ", took, " ms, samples=", samples,
-                   " (", below, " under the contact, ", p_float_t(float(y_at_depth) / spm_y, 1), " mm wiped)");
+    SERIAL_ECHOPGM("PAD_SCRAPE: pass ", pass, is_x ? " X" : " Y", p_float_t(from, 1), "->", p_float_t(from + float(fwd ? fed : -fed) / spm_a, 1),
+                   ": ", took, " ms, samples=", samples, " (in band ", in_band, ", under the contact ", below, ")");
     if (samples) SERIAL_ECHOPGM(" load min/avg/max=", fmin, "/", int32_t(fsum / int64_t(samples)), "/", fmax);
-    SERIAL_ECHOLNPGM(" (~100 counts/g; soft ", c.soft, " hard ", c.hard, ") jumps=", jumps, ", ends ", p_float_t(float(zs) / spm, 3), " mm from the contact");
+    SERIAL_ECHOLNPGM(" (~100 counts/g), Z ", p_float_t(float(zs) / spm, 3), " from the contact");
     if (err) return pad_fail(err);
     return !pad_err;
   }
 
   /**
-   * Over to the wipe start at travel height, free reference there, then the two wipe segments.
+   * Over to the wipe start at travel height, free reference there, then the passes and the flick.
    * zs: height (steps) above the rough contact, kept exact. false = failed (pad_err set).
    */
-  [[nodiscard]] static bool pad_scrape_run(const PadScrapeParams &p, const int32_t base, long &zs, long &y_moved) {
+  [[nodiscard]] static bool pad_scrape_run(const PadScrapeParams &p, const int32_t base, long &zs, long &x_moved, long &y_moved) {
     pad_z_to(zs, pad_steps(TRAVEL_MM));                // lift off the rough spot
     motion.blocking_move_xy(p.x, p.y0, 80);            // at travel height (planner: X/Y only)
     planner.synchronize();
@@ -600,38 +616,44 @@ template<uint8_t N>
     if (pad_abs(r.avg - base) > SCRAPE_REF_TOL) return pad_fail(F("reference does not match the baseline"));
 
     ui.set_status(F("Pad Z homing: wiping nozzle"));
+    stepper.enable_axis(X_AXIS);
     stepper.enable_axis(Y_AXIS);
-    const PadWipeCtl c = { p.soft, p.hard, pad_steps(p.jump), -pad_steps(SCRAPE_FLOOR_MM), pad_steps(SCRAPE_CEIL_MM) };
+    const PadWipeCtl c = { p.target, p.band, p.hard, -pad_steps(_MIN(p.depth, SCRAPE_FLOOR_MM)), pad_steps(SCRAPE_CEIL_MM),
+                           pad_steps(WIPE_NEAR_MM), pad_steps(COARSE_STEP_MM), pad_steps(WIPE_DOWN_MM), pad_steps(COARSE_STEP_MM) };
     bool ended = false;
-    if (!pad_wipe(p, c, r.avg, p.depth1, p.ymid, zs, y_moved, ended)) return false;
-    if (!ended && !pad_wipe(p, c, r.avg, p.depth2, p.y1, zs, y_moved, ended)) return false;
+    for (uint8_t i = 0; i < p.passes && !ended; ++i)
+      if (!pad_wipe_pass(p, c, r.avg, i + 1, Y_AXIS, (i & 1) ? p.y0 : p.y1, zs, y_moved, ended)) return false;
+    // Flick off the strip edge towards -X at the wipe height: material on the tip stays out there
+    if (!ended && p.flick_x < p.x && !pad_wipe_pass(p, c, r.avg, 0, X_AXIS, p.flick_x, zs, x_moved, ended)) return false;
     return ended ? pad_fail(F("load limit, wipe ended early")) : true;
   }
 
   /**
    * The wipe, from the rough contact on the strip (zs = height above it, steps). Always ends at
-   * least TRAVEL_MM over that contact with motion.position X/Y matching the steppers.
+   * least TRAVEL_MM over that contact (lifting off where the wipe ended: after the flick, off the
+   * bed) with motion.position X/Y matching the steppers.
    * true = done or skipped (a warning; pad_err cleared). false = homing must fail (stopped,
    * interrupted); pad_err set, nothing left to lift.
    */
   [[nodiscard]] static bool pad_scrape(const PadScrapeParams &p, const int32_t base, long &zs) {
-    SERIAL_ECHOLNPGM("PAD_SCRAPE: wipe X", p_float_t(p.x, 1), " Y", p_float_t(p.y0, 1), "->", p_float_t(p.ymid, 1),
-                     " at contact-", p_float_t(p.depth1, 2), ", ->", p_float_t(p.y1, 1), " at contact-", p_float_t(p.depth2, 2),
-                     " mm, soft ", p.soft, " (jump ", p_float_t(p.jump, 2), " mm) hard ", p.hard);
-    long y_moved = 0;
+    SERIAL_ECHOLNPGM("PAD_SCRAPE: wipe X", p_float_t(p.x, 1), " Y", p_float_t(p.y0, 1), "<->", p_float_t(p.y1, 1), " x", p.passes,
+                     " at ", p_float_t(p.speed, 0), " mm/s, load ", p.target, "+-", p.band, " hard ", p.hard,
+                     ", depth max ", p_float_t(p.depth, 2), " mm, flick to X", p_float_t(p.flick_x, 1));
+    long x_moved = 0, y_moved = 0;
     pad_err = nullptr;
-    const bool ok = pad_scrape_run(p, base, zs, y_moved);
-    pad_z_to(zs, _MAX(zs, pad_steps(TRAVEL_MM)));      // lift-off at the far end (or where it stopped)
+    const bool ok = pad_scrape_run(p, base, zs, x_moved, y_moved);
+    pad_z_to(zs, _MAX(zs, pad_steps(TRAVEL_MM)));      // lift-off where the wipe ended
     // Stopped, killed or something queued a move: homing must fail. Anything else only skips the wipe.
     const bool fatal = !ok && (pad_err_stopped || !marlin.isRunning() || planner.has_blocks_queued());
 
-    // Direct Y steps into the position. Something queued meanwhile (pad_check failed) may have run:
+    // Direct X/Y steps into the position. Something queued meanwhile (pad_check failed) may have run:
     // drop it and take the steppers' counts first.
     if (planner.has_blocks_queued()) {
       planner.quick_stop();
       planner.synchronize();
       motion.set_current_from_steppers_for_axis(ALL_AXES_ENUM);
     }
+    motion.position.x += float(x_moved) / planner.settings.axis_steps_per_mm[X_AXIS];
     motion.position.y += float(y_moved) / planner.settings.axis_steps_per_mm[Y_AXIS];
     motion.sync_plan_position();
 
@@ -667,6 +689,14 @@ template<uint8_t N>
 
   // Touch at print temperature. Before moving over the pad, so ooze doesn't drip on it.
   motion.sync_plan_position();
+  #if ENABLED(PAD_SCRAPE)
+    // The wipe will run (hot enough to extrude): wait off the bed, so ooze drips outside it
+    if (PAD_HOME_NOZZLE_TEMP > 0 && !thermalManager.targetTooColdToExtrude(0)) {
+      motion.blocking_move_xy(float(PAD_SCRAPE_PARK_X), float(PAD_SCRAPE_PARK_Y), 80);
+      planner.synchronize();
+      SERIAL_ECHOLNPGM("PAD_SCRAPE: heating parked at X", PAD_SCRAPE_PARK_X, " Y", PAD_SCRAPE_PARK_Y);
+    }
+  #endif
   if (!pad_heat_and_wait()) return false;
 
   #if ENABLED(PAD_SCRAPE)

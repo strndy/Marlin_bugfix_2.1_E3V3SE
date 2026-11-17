@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Run the production wipe load watch (Marlin/src/e3v3se/PadScrapeCtl.h) inside a copy of the
-PadHoming.cpp wipe loop against a simulated strip: soft strip, stiff surface, a blob on the
-nozzle that wears off, deposits on the strip, thermal drift, noise, single-sample spikes and
-one sample of HX711 lag. Checks: never below the depth floor, Y moves only at the target
-height, soft limit -> jumps, hard limit -> the wipe ends."""
+"""Run the production wipe control (Marlin/src/e3v3se/PadScrapeCtl.h: load servo and feed speed
+profile) inside a timing model of PadHoming.cpp pad_wipe_pass(): Z and the feed axis step while
+each HX711 conversion runs (12.5 ms), the control runs once per sample. Simulated strip: stiffness,
+slope, deposits, a hand pressing the bed, drift, noise, spikes, one sample of HX711 lag.
+
+Checks: never below the depth floor; the feed travels at most ~0.35 mm between samples (reaction
+distance at 25 mm/s); the wipe reaches its speed; the feed stops quickly when the load is over the
+band; the load is held in the band on a strip stiff enough for it; hand presses end the wipe in
+time; the flick only moves X, from the strip to the flick X."""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -14,6 +18,7 @@ HARNESS = r'''
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
+#include <algorithm>
 #include "Marlin/src/e3v3se/PadScrapeCtl.h"
 
 static int fails = 0;
@@ -21,117 +26,120 @@ static int fails = 0;
 
 struct Sim {
   const char *name;
-  double k_mm;             // strip stiffness, counts per mm
-  double blob_mm, blob_k;  // plastic under the tip at the start, its stiffness (counts/mm)
-  double wear;             // blob mm removed per (count * mm of Y)
-  double bump_y, bump_mm, ramp; // deposit on the strip: rises over 'ramp' mm, 2 mm flat, falls
+  double k_mm;                  // strip stiffness, counts per mm
+  double bump_y, bump_mm, ramp; // deposit on the strip around bump_y: rises over 'ramp' mm, 2 mm flat
+  double press_after_s, press;  // a hand presses the bed (load independent of Z) after this time
   double drift_per_s, noise;
-  int expect_end;          // 0 = both segments complete, 1 = the wipe ends (hard limit)
-  int min_jumps;
-  double press_y, press;   // a hand presses the bed (load independent of Z) from this Y on
+  int expect_end;               // 0 = all passes + flick complete, 1 = the wipe ends
+  double min_in_band;           // fraction of the samples on the strip that must be in the band
 };
 
 static double frand() { return std::rand() / double(RAND_MAX) * 2 - 1; }
 
+// Firmware constants (PadHoming.cpp / Configuration_adv.h defaults)
+static const double SPM = 400, SPM_A = 80, V0 = 5, ACCEL = 2000, VMAX = 25;
+static const long SAMPLE_US = 12500, Z_US = 625;
+
 static void run(const Sim &s) {
-  const double spm = 400, spm_y = 80;                          // Z 400 steps/mm, Y 80 steps/mm
-  const long travel = 5 * 400;
-  // Rough contact (z = 0) is where the first thing touched: the blob if there is one
-  const double contact_mm = s.blob_mm;
-  const PadWipeCtl c = { 20000, 35000, long(0.1 * spm), -long(0.4 * spm), long(1.0 * spm) };
-  long z = travel;                       // the wipe starts at travel height over Y0 = 50
-  double y = 50, blob = s.blob_mm, t = 0, prev = 0, fmax = 0;
-  int jumps = 0, ended = 0;
+  const PadWipeCtl c = { 15000, 5000, 35000, -long(0.2 * SPM), long(1.0 * SPM), long(0.3 * SPM),
+                         long(0.05 * SPM), long(0.01 * SPM), long(0.05 * SPM) };
+  long z = long(5 * SPM);                  // the wipe starts at travel height over Y0
+  double x = -5, y = 50, t = 0, prev = 0, fmax_true = 0, max_feed_per_sample = 0, vpeak = 0;
+  double max_stop_mm = 0;
+  int ended = 0, end_after_press = -1, samples_on = 0, in_band_on = 0;
+  long samples_total = 0;
+  bool x_ok = true;
   auto force_at = [&](long zz) {
-    const double tip = zz / spm + contact_mm - blob;              // nozzle tip + remaining blob, strip frame
-    double surf = -0.001 * (50 - y);                              // strip not level
-    if (s.bump_mm > 0) {
-      const double u = s.bump_y - y, r = s.ramp;                  // the wipe moves towards -Y
-      if (u > 0 && u < r) surf += s.bump_mm * u / r;
-      else if (u >= r && u < r + 2) surf += s.bump_mm;
-      else if (u >= r + 2 && u < 2 * r + 2) surf += s.bump_mm * (2 * r + 2 - u) / r;
+    double surf = -0.001 * (50 - y);       // strip not level
+    if (s.bump_mm > 0 && std::fabs(x + 5) < 1) {
+      const double u = std::fabs(y - s.bump_y);
+      if (u < 1) surf += s.bump_mm;
+      else if (u < 1 + s.ramp) surf += s.bump_mm * (1 + s.ramp - u) / s.ramp;
     }
-    const double pen = surf - tip;
-    return pen <= 0 ? 0.0 : pen * (blob > 0.01 ? s.blob_k : s.k_mm);
+    if (x < -7) return 0.0;                // off the strip edge: nothing under the nozzle
+    const double pen = surf - zz / SPM;
+    return pen <= 0 ? 0.0 : pen * s.k_mm;
   };
-  const double depth[2] = { 0.1, 0.2 }, y_end[2] = { 40, 20 };
-  // Timing as in PadHoming.cpp pad_wipe(): one HX711 conversion per 12.5 ms; while it converts, Z steps
-  // towards this sample's goal (625 us per step = 4 mm/s) and, only with Z at its target, Y steps
-  // (2500 us per step = 5 mm/s). Nothing else may block the loop.
-  const long sample_us = 12500, z_us = 625, y_us = 2500;
-  int press_start = -1, press_end_lat = -1;
-  for (int seg = 0; seg < 2 && !ended; ++seg) {
-    long target = -long(std::lround(depth[seg] * spm));
-    if (target < c.floor) target = c.floor;
-    uint8_t quiet = 0;
-    long y_left = std::lround((y - y_end[seg]) * spm_y), y_wiped = 0, samples = 0, last_jump_z = 0;
-    bool jumped = false;
-    for (int i = 0; i < 20000; ++i) {
-      const long z_goal = target >= z ? target : std::max(target, z - (z > long(0.3 * spm) ? 20L : 4L));
-      for (long us = 0; us < sample_us; ) {
-        if (z != z_goal) { z += z_goal > z ? 1 : -1; us += z_us; continue; }
-        if (y_left && z == target) {
-          --y_left; ++y_wiped; y -= 1 / spm_y;
-          if (blob > 0) blob = std::fmax(0.0, blob - s.wear * prev / spm_y);
-          us += y_us; continue;
+  struct Pass { bool is_x; double to; };
+  const Pass passes[] = { {false, 20}, {false, 50}, {false, 20}, {false, 50}, {true, -11} };
+  long z_goal = z;
+  bool feed = false, band = false;
+  for (const Pass &p : passes) {
+    if (ended) break;
+    double &pos = p.is_x ? x : y;
+    const double from = pos, y_before = y;
+    long left = std::lround(std::fabs(p.to - from) * SPM_A);
+    const double dir = p.to > from ? 1 : -1;
+    double v = 0, us_next_a = 0, us_next_z = 0, stop_from = NAN;
+    const float dv2 = float(2 * ACCEL / SPM_A);
+    for (int i = 0; i < 100000; ++i) {
+      // One conversion: Z and the feed step as in the firmware's wait loop
+      const double t0 = t * 1e6, pos0 = pos;
+      for (double us = t0; us < t0 + SAMPLE_US; us += 25) {
+        if (z != z_goal && us >= us_next_z) { z += z_goal > z ? 1 : -1; us_next_z = us + Z_US; }
+        if (left && us >= us_next_a) {
+          v = pad_feed_speed(float(v), feed, left, float(VMAX), float(V0), dv2, [](float a) { return std::sqrt(a); });
+          if (v > 0) { --left; pos += dir / SPM_A; us_next_a = us + 1e6 / (v * SPM_A); }
+          else us_next_a = us + 1000;
+          vpeak = std::max(vpeak, v);
         }
-        break;
       }
+      t += SAMPLE_US * 1e-6;
+      max_feed_per_sample = std::max(max_feed_per_sample, std::fabs(pos - pos0));
+      if (!feed && !std::isnan(stop_from) && v == 0) { max_stop_mm = std::max(max_stop_mm, std::fabs(pos - stop_from)); stop_from = NAN; }
       CHECK(z >= c.floor, "z %ld under the floor", z);
-      // A jump above the current height is under way (20 steps = 0.05 mm per sample) by the next sample
-      if (jumped) { CHECK(z >= last_jump_z, "jump not under way within one sample (z %ld, expected >= %ld)", z, last_jump_z); jumped = false; }
+      if (p.is_x && (std::fabs(y - y_before) > 1e-9 || x < -11.0001 || x > -5 + 1e-9)) x_ok = false;
       double true_f = force_at(z);
-      const bool pressing = s.press > 0 && y <= s.press_y;
-      if (pressing) { true_f += s.press; if (press_start < 0) press_start = i; }
-      if (true_f > fmax) fmax = true_f;
-      const double seen = 0.3 * true_f + 0.7 * prev;             // one sample of lag
+      const bool pressing = s.press > 0 && t >= s.press_after_s;
+      if (pressing) true_f += s.press;
+      fmax_true = std::max(fmax_true, true_f);
+      const double seen = 0.3 * true_f + 0.7 * prev;          // one sample of lag
       prev = true_f;
       const double reading = seen + s.drift_per_s * t + s.noise * frand() + (i % 37 == 5 ? 900 : 0);
       const int32_t f = int32_t(std::fabs(reading));
-      t += sample_us * 1e-6;
-      ++samples;
-      const long z_before = z;
-      const PadWipeStep r = pad_wipe_control(c, f, target, quiet);
-      CHECK(target >= c.floor && target <= c.ceil, "target %ld out of range", target);
-      if (r == WIPE_END) { ended = 1; z = travel; if (press_start >= 0) press_end_lat = i - press_start; break; }
-      if (r == WIPE_JUMP) { ++jumps; jumped = target > z_before; last_jump_z = std::min(target, z_before + 20); }
-      if (!y_left && z == target) break;
-    }
-    // Samples are taken all along the wipe: at 5 mm/s and 80/s that is 16 per mm (jumps add more)
-    if (!ended && y_wiped) {
-      const double per_mm = samples / (y_wiped / spm_y);
-      CHECK(per_mm >= 14, "only %.1f samples per mm of wipe", per_mm);
+      ++samples_total;
+      const bool was_feed = feed;
+      if (pad_wipe_control(c, f, z, z_goal, feed, band) == WIPE_END) {
+        ended = 1; z = long(5 * SPM);
+        if (pressing) end_after_press = int((t - s.press_after_s) / (SAMPLE_US * 1e-6));
+        break;
+      }
+      if (was_feed && !feed && v > 0) stop_from = pos;
+      if (z <= 0 && !p.is_x) { ++samples_on; if (band) ++in_band_on; }
+      if (!left) break;
     }
   }
-  if (s.press > 0) {
-    CHECK(ended, "a hand press of %.0f did not end the wipe", s.press);
-    // Hard press: within 2 samples (one of HX711 lag). Soft press: jumps up to the lift limit first.
-    const int max_lat = s.press > c.hard ? 2 : 2 * int((c.ceil - c.floor) / c.jump) + 4;
-    CHECK(press_end_lat >= 0 && press_end_lat <= max_lat, "press ended the wipe after %d samples (max %d)", press_end_lat, max_lat);
-  }
-  std::printf("%-20s end=%d y=%5.1f jumps=%2d max_true_load=%6.0f blob_left=%.3f\n", s.name, ended, y, jumps, fmax, blob);
+  const double in_band = samples_on ? double(in_band_on) / samples_on : 0;
+  std::printf("%-20s end=%d t=%5.2fs samples=%4ld feed/sample=%.3fmm vpeak=%4.1f stop=%.3fmm in_band=%3.0f%% max_true=%6.0f\n",
+              s.name, ended, t, samples_total, max_feed_per_sample, vpeak, max_stop_mm, 100 * in_band, fmax_true);
   CHECK(ended == s.expect_end, "end=%d, expected %d", ended, s.expect_end);
-  CHECK(jumps >= s.min_jumps, "jumps=%d, expected >= %d", jumps, s.min_jumps);
+  CHECK(max_feed_per_sample <= 0.35, "feed moved %.3f mm between two samples", max_feed_per_sample);
+  CHECK(max_stop_mm <= 0.6, "feed took %.3f mm to stop after the load went over the band", max_stop_mm);
+  CHECK(x_ok, "the flick left its path (x %.2f)", x);
   if (!s.expect_end) {
-    CHECK(y <= 20.01, "wipe stopped at y=%.1f", y);
-    CHECK(fmax < c.hard, "true load %.0f reached the hard limit", fmax);
+    CHECK(vpeak >= 0.95 * VMAX, "peak speed only %.1f mm/s", vpeak);
+    CHECK(std::fabs(x + 11) < 0.02 && std::fabs(y - 50) < 0.02, "ended at X%.2f Y%.2f, expected the flick end X-11 Y50", x, y);
+    CHECK(in_band >= s.min_in_band, "load in the band for only %.0f%% of the samples", 100 * in_band);
+    CHECK(fmax_true < c.hard, "true load %.0f reached the hard limit", fmax_true);
   }
+  if (s.press >= 35000) CHECK(end_after_press >= 0 && end_after_press <= 2, "hard press ended the wipe after %d samples", end_after_press);
+  if (s.press > 0 && s.press < 35000) CHECK(end_after_press >= 0 && end_after_press <= 2 * int((c.ceil - c.floor) / c.up) + 6,
+                                            "soft press ended the wipe after %d samples", end_after_press);
 }
 
 int main() {
   std::srand(1);
   const Sim sims[] = {
-    // name               k_mm    blob blob_k  wear  bump_y bump ramp drift noise end jumps press_y press
-    { "clean soft strip",  30000, 0,   0,      0,    -1,    0,   0,   0,    450,  0,  0,  -1,    0 },
-    { "stiff surface",    140000, 0,   0,      0,    -1,    0,   0,   0,    450,  0,  1,  -1,    0 },
-    { "drift +300/s",      30000, 0,   0,      0,    -1,    0,   0,   300,  450,  0,  0,  -1,    0 },
-    { "drift -300/s",      30000, 0,   0,      0,    -1,    0,   0,  -300,  450,  0,  0,  -1,    0 },
-    { "blob wears off",    30000, 0.3, 300000, 2e-6, -1,    0,   0,   100,  450,  0,  1,  -1,    0 },
-    { "ramped deposit",    30000, 0,   0,      0,    35,    0.5, 2,   0,    450,  0,  1,  -1,    0 },
-    { "stiff deposit",    140000, 0,   0,      0,    35,    0.3, 3,   0,    450,  0,  1,  -1,    0 },
-    { "hand press 400 g",  30000, 0,   0,      0,    -1,    0,   0,   0,    450,  1,  0,   30,    40000 },
-    { "hand press 250 g",  30000, 0,   0,      0,    -1,    0,   0,   0,    450,  1,  1,   30,    25000 },
-    { "vertical step",    140000, 0,   0,      0,    35,    0.5, 0.01, 0,   450,  1,  0,  -1,    0 },
+    // name                k_mm     bump_y bump  ramp  press_s press  drift noise end in_band
+    { "strip ~1 kg/mm",    100000,  -1,    0,    0,    -1,     0,     0,    450,  0,  0.6 },
+    { "stiff 1.4 kg/mm",   140000,  -1,    0,    0,    -1,     0,     0,    450,  0,  0.6 },
+    { "soft 0.3 kg/mm",     30000,  -1,    0,    0,    -1,     0,     0,    450,  0,  0.0 },
+    { "drift +300/s",      100000,  -1,    0,    0,    -1,     0,     300,  450,  0,  0.5 },
+    { "drift -300/s",      100000,  -1,    0,    0,    -1,     0,    -300,  450,  0,  0.5 },
+    { "deposit 0.3 ramp",  100000,  35,    0.3,  3,    -1,     0,     0,    450,  0,  0.4 },
+    { "hand press 400 g",  100000,  -1,    0,    0,    1.5,    40000, 0,    450,  1,  0.0 },
+    { "hand press 250 g",  100000,  -1,    0,    0,    1.5,    25000, 0,    450,  1,  0.0 },
+    { "vertical deposit",  140000,  35,    0.6,  0.02, -1,     0,     0,    450,  1,  0.0 },
   };
   for (const Sim &s : sims) run(s);
   return fails ? 1 : 0;

@@ -64,12 +64,14 @@
     // Nozzle wipe on the strip at X=PAD_SCRAPE_X (README "Pad Z homing", M8016).
     struct PadScrapeParams {
       float x, rough_y,        // strip X, rough touch Y
-            y0, ymid, y1,      // wipe start, depth change, end (lift-off) Y
-            depth1, depth2,    // wipe depth below the rough contact: y0..ymid, ymid..y1 (mm)
-            jump,              // jump up on the soft limit (mm)
-            speed,             // Y speed while wiping (mm/s)
+            y0, y1,            // wipe between these Y (starts at y0)
+            depth,             // max wipe depth below the rough contact (mm, <= 0.4)
+            speed,             // wipe speed (mm/s)
+            flick_x,           // flick off the strip to this X at the end (= x: no flick)
             contact;           // M8016: expected strip height relative to the homed Z0 (mm)
-      int32_t soft, hard;      // soft limit (jump) / hard limit (end), HX711 counts
+      int32_t target, band,    // load held: target +- band (HX711 counts)
+              hard;            // hard limit: lift, wipe ended
+      uint8_t passes;          // wipe passes (y0->y1, y1->y0, ...)
     };
     // M8016: rough touch + wipe only (X/Y/Z homed). Never stops the machine; reports on serial.
     void pad_scrape_only(const PadScrapeParams &p);

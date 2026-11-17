@@ -2515,25 +2515,29 @@
   #define PAD_HOME_BED_TEMP     50 // (°C) Default bed temperature. 0 = do not heat the bed.
 
   // Wipe the nozzle before homing (EXPERIMENTAL, README "Pad Z homing"). With a nozzle hot enough to
-  // extrude, G28 homes Y then X, retracts, touches roughly on the scrape strip (PAD_SCRAPE_X,
-  // PAD_SCRAPE_ROUGH_Y), wipes the nozzle along the strip at set depths below that contact with the
-  // load watched live (over PAD_SCRAPE_SOFT: jump up PAD_SCRAPE_JUMP and go on; over
-  // PAD_SCRAPE_FORCE_MAX: lift, wipe ended), lifts at PAD_SCRAPE_Y1, homes precisely on the pad and
-  // goes to the print start point PAD_SCRAPE_END_X/Y/Z. M8016 runs the rough touch and the wipe alone.
-  // Loads in HX711 counts (~100 per gram).
+  // extrude, G28 homes Y then X, heats parked off the bed, retracts, touches roughly on the scrape
+  // strip (PAD_SCRAPE_X, PAD_SCRAPE_ROUGH_Y), wipes along the strip PAD_SCRAPE_PASSES times between
+  // PAD_SCRAPE_Y0 and PAD_SCRAPE_Y1 holding the load at PAD_SCRAPE_FORCE +- PAD_SCRAPE_BAND (live
+  // HX711 control of Z, never deeper than PAD_SCRAPE_DEPTH below the contact; over
+  // PAD_SCRAPE_FORCE_MAX: lift, wipe ended), flicks off the strip to PAD_SCRAPE_FLICK_X, lifts there,
+  // homes precisely on the pad at once and goes to the print start point PAD_SCRAPE_END_X/Y/Z.
+  // M8016 runs the rough touch and the wipe alone. Loads in HX711 counts (~100 per gram).
   //#define PAD_SCRAPE
   #if ENABLED(PAD_SCRAPE)
     #define HOME_Y_BEFORE_X              // Y first, then X: the nozzle ends next to the strip
+    #define PAD_SCRAPE_PARK_X    -11     // (mm) Wait for heat here, off the bed (ooze drips outside)
+    #define PAD_SCRAPE_PARK_Y     10
     #define PAD_SCRAPE_X          -5     // (mm) Strip X: left of the sheet, on the bed plate
     #define PAD_SCRAPE_ROUGH_Y    10     // (mm) Rough touch Y
     #define PAD_SCRAPE_Y0         50     // (mm) Wipe start
-    #define PAD_SCRAPE_YMID       40     // (mm) Depth change
-    #define PAD_SCRAPE_Y1         20     // (mm) Wipe end; the nozzle lifts off here
-    #define PAD_SCRAPE_DEPTH1      0.1   // (mm) Wipe depth below the rough contact, Y0..YMID (max 0.4)
-    #define PAD_SCRAPE_DEPTH2      0.2   // (mm) Wipe depth below the rough contact, YMID..Y1 (max 0.4)
-    #define PAD_SCRAPE_JUMP        0.1   // (mm) Jump up when the load passes PAD_SCRAPE_SOFT
-    #define PAD_SCRAPE_SOFT    20000     // Soft load limit (~200 g)
+    #define PAD_SCRAPE_Y1         20     // (mm) Wipe turning point: Y0->Y1, Y1->Y0, ...
+    #define PAD_SCRAPE_PASSES      4     // Wipe passes
+    #define PAD_SCRAPE_SPEED      25     // (mm/s) Wipe speed (the load is read every HX711 sample, ~12.5 ms)
+    #define PAD_SCRAPE_DEPTH       0.2   // (mm) Deepest wipe height below the rough contact (max 0.4)
+    #define PAD_SCRAPE_FORCE   15000     // Load held while wiping (~150 g) ...
+    #define PAD_SCRAPE_BAND     5000     // ... +- this: over it Z goes up, under it back down to the depth
     #define PAD_SCRAPE_FORCE_MAX 35000   // Hard load limit (~350 g): lift at once, wipe ended
+    #define PAD_SCRAPE_FLICK_X   -11     // (mm) Flick off the strip edge to here at the end, then lift (comment out: no flick)
     #define PAD_SCRAPE_TRIGGER  2500     // Contact threshold of the rough touch on the strip
     #define PAD_SCRAPE_RETRACT     2     // (mm) Filament pulled back before the first touch (logical E unchanged)
     #define PAD_SCRAPE_END_X       0     // (mm) G28 ends here (the print start point) instead of raising Z,

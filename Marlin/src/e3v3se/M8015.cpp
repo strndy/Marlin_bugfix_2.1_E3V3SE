@@ -85,13 +85,14 @@ void GcodeSuite::M8015()
  * M8016: rough touch + nozzle wipe only, for tuning (pad Z homing; X/Y/Z must be homed).
  * Goes to X/R at least 5 mm over the expected strip height, takes the free reference there,
  * touches down (fast-change detection, at most 1 mm under the expected height), lifts, moves to
- * Y at travel height, takes a reference again, wipes Y->I at contact-A and I->J at contact-B with
- * the load watched live, lifts at J. Defaults from PAD_SCRAPE_*.
- *   X<mm> strip X    R<mm> rough touch Y    Y<mm> wipe start    I<mm> depth change    J<mm> wipe end
- *   A<mm> B<mm>      depths below the rough contact (0..0.4)
- *   S<counts>        soft limit: jump up by H<mm> and continue (~100 counts per gram)
+ * Y at travel height, takes a reference again, wipes P passes between Y and J holding the load at
+ * S +- W (never deeper than D below the rough contact), flicks to K, lifts. Defaults from PAD_SCRAPE_*.
+ *   X<mm> strip X    R<mm> rough touch Y    Y<mm> wipe start    J<mm> turning point    P<n> passes
+ *   D<mm>            max depth below the rough contact (0..0.4)
+ *   S<counts> W<counts>  load held and band (~100 counts per gram)
  *   L<counts>        hard limit: lift at once, wipe ended
- *   F<mm/s>          Y speed while wiping (1..20, default 5)
+ *   F<mm/s>          wipe speed (1..50)
+ *   K<mm>            flick to this X at the end (K = X: no flick)
  *   Z<mm>            expected strip height relative to homed Z0 (default 0). Z10 tests in the air:
  *                    no contact down to Z9, so it stops with "no strip contact in range".
  */
@@ -100,22 +101,21 @@ void GcodeSuite::M8016() {
   if (parser.seenval('X')) p.x = parser.value_float();
   if (parser.seenval('R')) p.rough_y = parser.value_float();
   if (parser.seenval('Y')) p.y0 = parser.value_float();
-  if (parser.seenval('I')) p.ymid = parser.value_float();
   if (parser.seenval('J')) p.y1 = parser.value_float();
-  if (parser.seenval('A')) p.depth1 = parser.value_float();
-  if (parser.seenval('B')) p.depth2 = parser.value_float();
-  if (parser.seenval('H')) p.jump = parser.value_float();
-  if (parser.seenval('S')) p.soft = parser.value_long();
+  if (parser.seenval('P')) p.passes = constrain(parser.value_int(), 1, 20);
+  if (parser.seenval('D')) p.depth = parser.value_float();
+  if (parser.seenval('S')) p.target = parser.value_long();
+  if (parser.seenval('W')) p.band = parser.value_long();
   if (parser.seenval('L')) p.hard = parser.value_long();
   if (parser.seenval('F')) p.speed = parser.value_float();
+  if (parser.seenval('K')) p.flick_x = parser.value_float();
   if (parser.seenval('Z')) p.contact = parser.value_float();
-  if (!(p.hard <= 60000 && p.soft > PAD_SCRAPE_TRIGGER && p.soft < p.hard)
-    || !WITHIN(p.x, X_MIN_POS, X_MAX_POS) || !WITHIN(p.rough_y, Y_MIN_POS, Y_MAX_POS) || !WITHIN(p.y0, Y_MIN_POS, Y_MAX_POS)
-    || !WITHIN(p.ymid, Y_MIN_POS, Y_MAX_POS) || !WITHIN(p.y1, Y_MIN_POS, Y_MAX_POS) || (p.ymid - p.y0) * (p.y1 - p.ymid) <= 0
-    || !WITHIN(p.depth1, 0.0f, 0.4f) || !WITHIN(p.depth2, 0.0f, 0.4f) || !WITHIN(p.jump, 0.02f, 0.5f)
-    || !WITHIN(p.speed, 1.0f, 20.0f) || !WITHIN(p.contact, -2.0f, 50.0f)) {
-    SERIAL_ECHOLNPGM("M8016: bad parameter (need ", PAD_SCRAPE_TRIGGER, " < S < L <= 60000, X/R/Y/I/J in range with I between Y and J,"
-                     " A/B 0..0.4, H 0.02..0.5, F 1..20, Z -2..50)");
+  if (!(p.hard <= 60000 && p.band > PAD_NOISE_MAX && p.target > p.band && p.target + p.band < p.hard)
+    || !WITHIN(p.x, X_MIN_POS, X_MAX_POS) || !WITHIN(p.flick_x, X_MIN_POS, p.x) || !WITHIN(p.rough_y, Y_MIN_POS, Y_MAX_POS)
+    || !WITHIN(p.y0, Y_MIN_POS, Y_MAX_POS) || !WITHIN(p.y1, Y_MIN_POS, Y_MAX_POS) || ABS(p.y1 - p.y0) < 5
+    || !WITHIN(p.depth, 0.0f, 0.4f) || !WITHIN(p.speed, 1.0f, 50.0f) || !WITHIN(p.contact, -2.0f, 50.0f)) {
+    SERIAL_ECHOLNPGM("M8016: bad parameter (need ", PAD_NOISE_MAX, " < W < S, S + W < L <= 60000, X/R/Y/J in range, |J-Y| >= 5,"
+                     " K between X_MIN_POS and X, D 0..0.4, F 1..50, Z -2..50)");
     return;
   }
   pad_scrape_only(p);
