@@ -70,12 +70,7 @@ constexpr uint8_t STUCK_COUNT     = 8;     // identical raw readings in a row = 
 // least-squares slope over the last SETTLE_POINTS points (~10 s); it must stay under SETTLE_MAX_COUNTS
 // per interval for SETTLE_CALM evaluations in a row. A difference of two single points was fooled
 // by the point-to-point scatter while the bed still drifted ~300 counts per 2 s.
-// PAD_SCRAPE, before the precise homing: the first SETTLE_POINTS points come SETTLE_QUICK_MS apart and a
-// gauge already calm passes after them (~4 s).
 constexpr millis_t SETTLE_INTERVAL_MS = 2000, SETTLE_LIMIT_MS = SEC_TO_MS(180);
-#if ENABLED(PAD_SCRAPE)
-  constexpr millis_t SETTLE_QUICK_MS = 500;
-#endif
 constexpr int32_t SETTLE_MAX_COUNTS = 200;  // per interval, i.e. ~1 g/s
 constexpr uint8_t SETTLE_POINTS = 6, SETTLE_CALM = 3;
 constexpr int32_t DRIFT_TRACK_MAX   = 30000; // descent may follow this much slow drift (~300 g)
@@ -290,7 +285,7 @@ static void pad_sort(int32_t * const v, const uint8_t n) {
 // Wait until the drift (slope over the last SETTLE_POINTS points) is under SETTLE_MAX_COUNTS per
 // SETTLE_INTERVAL_MS, SETTLE_CALM times in a row. Gives up after SETTLE_LIMIT_MS and continues:
 // the descent tracks slow drift anyway.
-[[nodiscard]] static bool pad_wait_settled(TERN_(PAD_SCRAPE, const bool quick=false)) {
+[[nodiscard]] static bool pad_wait_settled() {
   ui.set_status(F("Pad Z homing: sensor settling"));
   const millis_t start = millis(), limit = start + SETTLE_LIMIT_MS;
   float pt[SETTLE_POINTS], pv[SETTLE_POINTS];          // ring: time (s since start), point (counts)
@@ -313,13 +308,9 @@ static void pad_sort(int32_t * const v, const uint8_t n) {
       calm = pad_abs(drift) < SETTLE_MAX_COUNTS ? calm + 1 : 0;
       SERIAL_ECHOLNPGM("PAD_HOME: settling, drift=", drift, " per ", SETTLE_INTERVAL_MS, " ms (", calm, "/", SETTLE_CALM, ")");
       if (calm >= SETTLE_CALM) return true;
-      #if ENABLED(PAD_SCRAPE)
-        // Quick: the first points come SETTLE_QUICK_MS apart (~3 s); a gauge already calm (half the limit) is done
-        if (quick && n == SETTLE_POINTS && pad_abs(drift) < SETTLE_MAX_COUNTS / 2) { SERIAL_ECHOLNPGM("PAD_HOME: gauge calm"); return true; }
-      #endif
     }
     if (ELAPSED(millis(), limit)) { SERIAL_ECHOLNPGM("PAD_HOME: still drifting, continuing (drift is tracked)"); return true; }
-    for (const millis_t next = millis() + TERN(PAD_SCRAPE, (quick && n < SETTLE_POINTS ? SETTLE_QUICK_MS : SETTLE_INTERVAL_MS), SETTLE_INTERVAL_MS); PENDING(millis(), next);) {
+    for (const millis_t next = millis() + SETTLE_INTERVAL_MS; PENDING(millis(), next);) {
       marlin.idle_no_sleep();
       if (!pad_check(0)) return false;
     }
@@ -677,7 +668,8 @@ template<uint8_t N>
   safe_delay(300);
 
   // ---- Wait for the gauge to stop drifting (a freshly heated bed drifts up to ~300 counts/s) ----
-  // (Not before the rough touch on the strip: the descent tracks drift; the settle comes before the precise homing.)
+  // (Not in the wipe sequence: every second hot lets new ooze form. The descents track drift, and the
+  // baselines and fine passes check noise and drift themselves.)
   pad_reader_reset();
   if (TERN1(PAD_SCRAPE, !scrape) && !pad_wait_settled()) return false;
 
@@ -719,9 +711,11 @@ template<uint8_t N>
       motion.blocking_move_xy(float(AUTOZ_TOOL_X), float(AUTOZ_TOOL_Y), 80);
       planner.synchronize();
       if (!pad_check(0)) return false;
+      // Straight on, before new ooze forms: no soak, no settle. A fresh baseline in the air (noise
+      // and drift checked); each fine pass takes its own, and the spread check catches the rest.
       safe_delay(300);
-      // Settle (quick when the gauge is already calm), then a fresh baseline in the air
-      if (!pad_wait_settled(true) || !pad_baseline<32>(F("sensor noisy or loaded"), base)) return false;
+      pad_reader_reset();
+      if (!pad_baseline<32>(F("sensor noisy or loaded"), base)) return false;
       SERIAL_ECHOLNPGM("PAD_HOME: precise spot X", AUTOZ_TOOL_X, " Y", AUTOZ_TOOL_Y, ", baseline=", base.avg, " noise=", base.noise);
       if (!pad_descend(base.avg, PAD_COARSE_TRIGGER, zs + pad_steps(PRECISE_MARGIN_MM), F("no pad contact (max travel)"),
                        travelled, track, d, glitches)) return false;
