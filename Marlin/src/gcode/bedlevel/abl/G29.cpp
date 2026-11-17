@@ -62,6 +62,10 @@
   #include "../../../lcd/dwin/proui/meshviewer.h"
 #endif
 
+#if ENABLED(PAD_Z_HOMING)
+  #include "../../../e3v3se/PadHoming.h"
+#endif
+
 #define DEBUG_OUT ENABLED(DEBUG_LEVELING_FEATURE)
 #include "../../../core/debug_out.h"
 
@@ -552,6 +556,8 @@ G29_TYPE GcodeSuite::G29() {
 
   } // !g29_in_progress
 
+  TERN_(PAD_MESH_NORMALIZE, float pad_mesh_ref = NAN); // bed height probed at the pad spot (NAN = use the mesh)
+
   #if ENABLED(PROBE_MANUALLY)
 
     // For manual probing, get the next index to probe now.
@@ -846,6 +852,15 @@ G29_TYPE GcodeSuite::G29() {
         } // inner
       } // outer
 
+      #if PAD_MESH_NORMALIZE
+        // The bed under the pad spot, where G28 homes Z: the mesh is made 0 there below
+        if (!isnan(abl.measured_z) && !faux && !abl.dryrun && !pad_mesh_probe(pad_mesh_ref, abl.verbose_level)) {
+          abl.measured_z = NAN;                         // fails like a grid point
+          TERN_(DWIN_CREALITY_LCD, HMI_flag.G29_level_not_normal = true);
+          set_bed_leveling_enabled(abl.reenable);
+        }
+      #endif
+
     #elif ENABLED(AUTO_BED_LEVELING_3POINT)
 
       // Probe at 3 arbitrary points
@@ -913,6 +928,9 @@ G29_TYPE GcodeSuite::G29() {
         COPY(bedlevel.z_values, abl.z_values);
         TERN_(IS_KINEMATIC, bedlevel.extrapolate_unprobed_bed_level());
         bedlevel.refresh_bed_level();
+        #if PAD_MESH_NORMALIZE
+          if (!faux) pad_mesh_normalize(isnan(pad_mesh_ref) ? NAN : pad_mesh_ref + abl.Z_offset);
+        #endif
 
         bedlevel.print_leveling_grid();
       }

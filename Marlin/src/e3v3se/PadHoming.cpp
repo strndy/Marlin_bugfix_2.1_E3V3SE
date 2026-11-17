@@ -43,6 +43,15 @@
 #if ENABLED(DWIN_CREALITY_LCD)
   #include "../lcd/dwin/creality/dwin.h"
 #endif
+#if ENABLED(PAD_SCRAPE)
+  #include "PadScrapeCtl.h"
+#endif
+#if PAD_MESH_NORMALIZE
+  #include "../module/probe.h"
+#endif
+#if PAD_MESH_NORMALIZE || (ENABLED(PAD_SCRAPE) && HAS_LEVELING)
+  #include "../feature/bedlevel/bedlevel.h"
+#endif
 
 // Motion constants (mm). Only the force thresholds are user settings.
 constexpr float Z_SPEED_MM_S      = 4,     // direct stepping speed, no acceleration
@@ -61,7 +70,12 @@ constexpr uint8_t STUCK_COUNT     = 8;     // identical raw readings in a row = 
 // least-squares slope over the last SETTLE_POINTS points (~10 s); it must stay under SETTLE_MAX_COUNTS
 // per interval for SETTLE_CALM evaluations in a row. A difference of two single points was fooled
 // by the point-to-point scatter while the bed still drifted ~300 counts per 2 s.
+// PAD_SCRAPE, before the precise homing: the first SETTLE_POINTS points come SETTLE_QUICK_MS apart and a
+// gauge already calm passes after them (~4 s).
 constexpr millis_t SETTLE_INTERVAL_MS = 2000, SETTLE_LIMIT_MS = SEC_TO_MS(180);
+#if ENABLED(PAD_SCRAPE)
+  constexpr millis_t SETTLE_QUICK_MS = 500;
+#endif
 constexpr int32_t SETTLE_MAX_COUNTS = 200;  // per interval, i.e. ~1 g/s
 constexpr uint8_t SETTLE_POINTS = 6, SETTLE_CALM = 3;
 constexpr int32_t DRIFT_TRACK_MAX   = 30000; // descent may follow this much slow drift (~300 g)
@@ -88,15 +102,29 @@ static bool pad_fail(FSTR_P const why, const long down=0) {
   return false;
 }
 
+#if ENABLED(PAD_SCRAPE)
+  static bool pad_scraped,       // the nozzle was scraped in this homing
+              pad_err_dirty;     // the failure is one a dirty nozzle tip causes
+  // A failure of the precise measurement that plastic on the tip explains
+  static bool pad_fail_dirty(FSTR_P const why, const long down=0) {
+    pad_err_dirty = true;
+    return pad_fail(why, down);
+  }
+  #define PAD_FAIL_DIRTY pad_fail_dirty
+#else
+  #define PAD_FAIL_DIRTY pad_fail
+#endif
+
 // ---- Touch at print temperature ----
 // A target already set (e.g. by the print's start G-code) is used; below these it counts as unset.
 constexpr int16_t NOZZLE_SET_MIN = 50, BED_SET_MIN = 30;
 constexpr millis_t HEAT_LIMIT_MS = SEC_TO_MS(900);   // a hot bed can take minutes
-constexpr float TOUCH_RETRACT_MM = 1;                // pulled back against ooze, not restored
+constexpr float TOUCH_RETRACT_MM = TERN(PAD_SCRAPE, PAD_SCRAPE_RETRACT, 1); // pulled back against ooze, not restored
 // The bed counts as reached at target - 1 °C, then BED_SOAK_MS more: the plate and the gauge keep
 // moving after the controller reaches temperature (fine passes crept 0.06 mm per pass without it).
 constexpr millis_t BED_SOAK_MS = SEC_TO_MS(30);
 static int16_t saved_nozzle = -1, saved_bed;         // targets before G28 (-1 = pad_preheat not run)
+
 
 static void pad_set_touch_targets() {
   if (PAD_HOME_NOZZLE_TEMP <= 0) return;
@@ -189,6 +217,8 @@ static FSTR_P pad_read(int32_t &val) {
   millis_t next_report = 0;
   marlin.heatup_start();                               // M108 (emergency parser) clears this
   TERN_(HAS_HEATED_BED, millis_t bed_since = 0);       // when the bed first reached its target (0 = not yet)
+  // A nozzle hot enough to extrude means the wipe runs first: the bed soaks meanwhile
+  TERN_(PAD_SCRAPE, const bool soak = thermalManager.targetTooColdToExtrude(0));
   for (;;) {
     marlin.idle(true);                                 // true: keep the steppers energized
     const millis_t ms = millis();
@@ -198,9 +228,13 @@ static FSTR_P pad_read(int32_t &val) {
       const int16_t bt = thermalManager.degTargetBed();
       if (bt > 0 && !bed_since && thermalManager.wholeDegBed() >= bt - 1) {
         bed_since = ms ?: 1;
+        #if ENABLED(PAD_SCRAPE)
+          if (!soak) SERIAL_ECHOLNPGM("PAD_HOME: bed at target (no soak: it soaks during the wipe)");
+          else
+        #endif
         SERIAL_ECHOLNPGM("PAD_HOME: bed at target, soaking ", BED_SOAK_MS / 1000, " s");
       }
-      hot = hot && (bt == 0 || (bed_since && ELAPSED(ms, bed_since + BED_SOAK_MS)));
+      hot = hot && (bt == 0 || (bed_since && (TERN0(PAD_SCRAPE, !soak) || ELAPSED(ms, bed_since + BED_SOAK_MS))));
     #endif
     if (hot) break;
     const bool cancelled = !marlin.is_heating() || TERN0(HAS_MEDIA, card.flag.abort_sd_printing);
@@ -256,7 +290,7 @@ static void pad_sort(int32_t * const v, const uint8_t n) {
 // Wait until the drift (slope over the last SETTLE_POINTS points) is under SETTLE_MAX_COUNTS per
 // SETTLE_INTERVAL_MS, SETTLE_CALM times in a row. Gives up after SETTLE_LIMIT_MS and continues:
 // the descent tracks slow drift anyway.
-[[nodiscard]] static bool pad_wait_settled() {
+[[nodiscard]] static bool pad_wait_settled(TERN_(PAD_SCRAPE, const bool quick=false)) {
   ui.set_status(F("Pad Z homing: sensor settling"));
   const millis_t start = millis(), limit = start + SETTLE_LIMIT_MS;
   float pt[SETTLE_POINTS], pv[SETTLE_POINTS];          // ring: time (s since start), point (counts)
@@ -279,9 +313,13 @@ static void pad_sort(int32_t * const v, const uint8_t n) {
       calm = pad_abs(drift) < SETTLE_MAX_COUNTS ? calm + 1 : 0;
       SERIAL_ECHOLNPGM("PAD_HOME: settling, drift=", drift, " per ", SETTLE_INTERVAL_MS, " ms (", calm, "/", SETTLE_CALM, ")");
       if (calm >= SETTLE_CALM) return true;
+      #if ENABLED(PAD_SCRAPE)
+        // Quick: the first points come SETTLE_QUICK_MS apart (~3 s); a gauge already calm (half the limit) is done
+        if (quick && n == SETTLE_POINTS && pad_abs(drift) < SETTLE_MAX_COUNTS / 2) { SERIAL_ECHOLNPGM("PAD_HOME: gauge calm"); return true; }
+      #endif
     }
     if (ELAPSED(millis(), limit)) { SERIAL_ECHOLNPGM("PAD_HOME: still drifting, continuing (drift is tracked)"); return true; }
-    for (const millis_t next = millis() + SETTLE_INTERVAL_MS; PENDING(millis(), next);) {
+    for (const millis_t next = millis() + TERN(PAD_SCRAPE, (quick && n < SETTLE_POINTS ? SETTLE_QUICK_MS : SETTLE_INTERVAL_MS), SETTLE_INTERVAL_MS); PENDING(millis(), next);) {
       marlin.idle_no_sleep();
       if (!pad_check(0)) return false;
     }
@@ -335,7 +373,7 @@ template<uint8_t N>
   uint8_t glitches = 0;
   for (;;) {
     if (!pad_check(down)) return false;
-    if (down + step_n > max_steps) return pad_fail(F("fine pass: no contact in range"), down);
+    if (down + step_n > max_steps) return PAD_FAIL_DIRTY(F("fine pass: no contact in range"), down);
     pad_step_z(step_n, false);
     down += step_n;
     ++i;
@@ -369,6 +407,236 @@ template<uint8_t N>
   return true;
 }
 
+/**
+ * Descend from the current height (where ref, the free reading, was just validated), one HX711
+ * sample per COARSE_STEP_MM, until the reading jumps by more than trigger against a reference
+ * that follows slow drift only (twice, the second sample without moving). travelled: steps down
+ * (also on failure). track: the drift-followed reference at the contact. d: the trigger delta.
+ */
+[[nodiscard]] static bool pad_descend(const int32_t ref, const int32_t trigger, const long max_n, FSTR_P const no_contact,
+                                      long &travelled, float &track, int32_t &d, uint8_t &glitches) {
+  const long coarse_n = pad_steps(COARSE_STEP_MM);
+  travelled = 0;
+  track = ref;
+  glitches = 0;
+  int32_t v;
+  for (;;) {
+    if (!pad_check(travelled)) return false;
+    if (travelled + coarse_n > max_n) return pad_fail(no_contact, travelled);
+    pad_step_z(coarse_n, false);
+    travelled += coarse_n;
+
+    if (!pad_sample(travelled, v)) return false;
+    d = pad_abs(v - int32_t(track));
+    #if ENABLED(PAD_SCRAPE)
+      if (pad_abs(v - ref) > (PAD_SCRAPE_FORCE_MAX)) break;   // loaded against the validated free reading: stop here
+    #endif
+    if (d > trigger) {
+      // Re-read without moving: a real load is still there, a glitch is not
+      int32_t v2;
+      if (!pad_sample(travelled, v2)) return false;
+      d = _MIN(d, pad_abs(v2 - int32_t(track)));
+      if (d > trigger) break;
+      if (++glitches > 10) return pad_fail(F("sensor glitches in descent"), travelled);
+    }
+    else if (d < trigger / 4) {
+      track += float(v - int32_t(track)) * (1.0f / 32.0f);
+      // Bounded so a broken sensor can't wander off forever; a real contact is a fast jump,
+      // which this gate (d < trigger/4, gain 1/32 per sample) never follows.
+      track = constrain(track, float(ref - DRIFT_TRACK_MAX), float(ref + DRIFT_TRACK_MAX));
+    }
+    marlin.idle_no_sleep();                            // heaters, watchdog, LCD
+  }
+  return true;
+}
+
+#if ENABLED(PAD_SCRAPE)
+
+  constexpr float TRAVEL_MM         = 5,      // travel height above the highest contact known
+                  SCRAPE_SEARCH_MM  = 1,      // M8016 rough descent: no contact this far below the expected height = skip
+                  SCRAPE_FLOOR_MM   = 0.4f,   // never deeper than this below the strip contact
+                  SCRAPE_CEIL_MM    = 1,      // jumped up this far over the contact and still loaded: end the wipe
+                  WIPE_NEAR_MM      = 0.3f,   // the descent to the wipe depth slows down from here over the contact
+                  WIPE_DOWN_MM      = 0.01f,  // ... to this per HX711 sample
+                  PRECISE_MARGIN_MM = 2;      // precise descent: no pad contact this far below the strip height = fail
+  // Free reading at the wipe start vs the baseline before the rough touch: catches a reference taken while
+  // loaded; allows the drift of an unsoaked bed over the ~10 s between them (up to ~300 counts/s)
+  constexpr int32_t SCRAPE_REF_TOL = 2 * (PAD_COARSE_TRIGGER);
+
+  static_assert(PAD_SCRAPE_X >= X_MIN_POS && PAD_SCRAPE_X <= X_MAX_POS, "PAD_SCRAPE_X is out of the X range.");
+  static_assert(WITHIN(PAD_SCRAPE_ROUGH_Y, Y_MIN_POS, Y_MAX_POS) && WITHIN(PAD_SCRAPE_Y0, Y_MIN_POS, Y_MAX_POS)
+             && WITHIN(PAD_SCRAPE_YMID, Y_MIN_POS, Y_MAX_POS) && WITHIN(PAD_SCRAPE_Y1, Y_MIN_POS, Y_MAX_POS), "PAD_SCRAPE_*Y* are out of the Y range.");
+  static_assert((PAD_SCRAPE_YMID - PAD_SCRAPE_Y0) * (PAD_SCRAPE_Y1 - PAD_SCRAPE_YMID) > 0, "PAD_SCRAPE_YMID must lie between PAD_SCRAPE_Y0 and PAD_SCRAPE_Y1.");
+  static_assert(ABS((AUTOZ_TOOL_X) - (PAD_SCRAPE_X)) >= 20, "The pad spot must be at least 20 mm from the scrape strip.");
+  static_assert(PAD_SCRAPE_TRIGGER > PAD_NOISE_MAX && PAD_SCRAPE_TRIGGER < PAD_SCRAPE_SOFT, "Need PAD_NOISE_MAX < PAD_SCRAPE_TRIGGER < PAD_SCRAPE_SOFT.");
+  static_assert(PAD_SCRAPE_SOFT < PAD_SCRAPE_FORCE_MAX && PAD_SCRAPE_FORCE_MAX <= 60000, "Need PAD_SCRAPE_SOFT < PAD_SCRAPE_FORCE_MAX <= 60000.");
+  static_assert(PAD_SCRAPE_DEPTH1 >= 0 && PAD_SCRAPE_DEPTH1 <= SCRAPE_FLOOR_MM && PAD_SCRAPE_DEPTH2 >= 0 && PAD_SCRAPE_DEPTH2 <= SCRAPE_FLOOR_MM,
+                "PAD_SCRAPE_DEPTH1/2 must be 0..0.4 mm.");
+  static_assert(PAD_SCRAPE_JUMP >= 0.02 && PAD_SCRAPE_JUMP <= 0.5, "PAD_SCRAPE_JUMP must be 0.02..0.5 mm.");
+  static_assert(PAD_SCRAPE_RETRACT >= 0 && PAD_SCRAPE_RETRACT <= 10, "PAD_SCRAPE_RETRACT must be 0..10 mm.");
+  static_assert(WITHIN(PAD_SCRAPE_END_X, X_MIN_POS, X_MAX_POS) && WITHIN(PAD_SCRAPE_END_Y, Y_MIN_POS, Y_MAX_POS)
+             && PAD_SCRAPE_END_Z >= 0 && PAD_SCRAPE_END_Z <= 50, "PAD_SCRAPE_END_X/Y/Z are out of range.");
+
+  PadScrapeParams pad_scrape_defaults() {
+    return { float(PAD_SCRAPE_X), float(PAD_SCRAPE_ROUGH_Y), float(PAD_SCRAPE_Y0), float(PAD_SCRAPE_YMID), float(PAD_SCRAPE_Y1),
+             float(PAD_SCRAPE_DEPTH1), float(PAD_SCRAPE_DEPTH2), float(PAD_SCRAPE_JUMP), 5.0f, 0.0f,
+             int32_t(PAD_SCRAPE_SOFT), int32_t(PAD_SCRAPE_FORCE_MAX) };
+  }
+
+  // Direct-step Z to height 'to' (steps). zs is the height now, in the same frame.
+  static void pad_z_to(long &zs, const long to) {
+    if (to > zs) pad_step_z(to - zs, true); else pad_step_z(zs - to, false);
+    zs = to;
+  }
+
+  /**
+   * One wipe segment: down to 'depth' below the rough contact (zs = 0) watching the load, then Y
+   * to y_end at that height (Y only moves while Z is at its target). Y and Z by direct stepping
+   * (stepper ISR idle, nothing queued). y_moved: Y steps done, not yet in motion.position.
+   * ended: the wipe ended (hard limit / no relief), the nozzle is lifted to travel height.
+   * false = failed (pad_err set).
+   */
+  [[nodiscard]] static bool pad_wipe(const PadScrapeParams &p, const PadWipeCtl &c, const int32_t ref,
+                                     const float depth, const float y_end, long &zs, long &y_moved, bool &ended) {
+    const float spm = pad_spm(), spm_y = planner.settings.axis_steps_per_mm[Y_AXIS],
+                y_now = motion.position.y + float(y_moved) / spm_y;
+    const long y_total = lroundf((y_end - y_now) * spm_y), near_n = pad_steps(WIPE_NEAR_MM),
+               fast_n = pad_steps(COARSE_STEP_MM), slow_n = pad_steps(WIPE_DOWN_MM);
+    const bool fwd = y_total > 0;
+    long y_left = ABS(y_total), target = _MAX(c.floor, -pad_steps(depth));
+    const uint32_t y_us = _MAX(50UL, uint32_t(1000000.0f / (spm_y * p.speed)));
+    const millis_t limit = millis() + SEC_TO_MS(20) + millis_t(3000.0f * ABS(y_end - y_now) / p.speed);
+
+    int32_t fmin = INT32_MAX, fmax = 0;
+    int64_t fsum = 0;
+    uint32_t n = 0, samples = 0;
+    uint16_t jumps = 0;
+    uint8_t quiet = 0;
+    FSTR_P err = nullptr;
+
+    const bool old_dir = Y_DIR_READ();
+    Y_DIR_WRITE(fwd);
+    DELAY_US(100);
+    uint32_t next_us = micros();
+    for (;;) {
+      // Step Y while the HX711 converts (~12.5 ms per sample), only with Z at its target
+      const bool y_go = y_left && zs == target;
+      const millis_t t0 = millis();
+      while (READ(HX711_SDO_PIN)) {
+        if (millis() - t0 > HX711_TIMEOUT_MS) { err = F("HX711 no data"); break; }
+        if (y_go && y_left) {
+          const uint32_t now = micros();
+          if (int32_t(now - next_us) >= 0) {
+            Y_STEP_WRITE(STEP_STATE_Y);
+            DELAY_US(2);
+            Y_STEP_WRITE(!STEP_STATE_Y);
+            --y_left;
+            y_moved += fwd ? 1 : -1;
+            next_us = now + y_us;                      // from now: no catch-up burst after a pause
+          }
+        }
+        hal.watchdog_refresh();
+      }
+      int32_t v;
+      if (err || (err = pad_read(v))) break;
+      const int32_t f = pad_abs(v - ref);
+      ++samples;
+      if (zs <= 0) { NOMORE(fmin, f); NOLESS(fmax, f); fsum += f; ++n; }   // load while below the contact
+      const PadWipeStep st = pad_wipe_control(c, f, target, quiet);
+      if (st == WIPE_END) {
+        pad_z_to(zs, pad_steps(TRAVEL_MM));            // lift at once, then report
+        SERIAL_ECHOPGM("PAD_SCRAPE: load ", f);
+        SERIAL_ECHO(f > c.hard ? F(" over the hard limit") : F(" still over the soft limit at the lift limit"));
+        SERIAL_ECHOLNPGM(" (hard ", c.hard, "): lifted, wipe ended");
+        ended = true;
+        break;
+      }
+      if (st == WIPE_JUMP) ++jumps;
+      if (!y_left && zs == target) break;              // segment done
+      // Z toward the target: up at once, down one checked step per sample (slow near the contact)
+      if (target > zs) pad_z_to(zs, target);
+      else if (target < zs) pad_z_to(zs, _MAX(target, zs - (zs > near_n ? fast_n : slow_n)));
+      if (!pad_check(0)) break;                        // pad_err set
+      if (ELAPSED(millis(), limit)) { err = F("wipe timeout"); break; }
+      if ((samples & 7) == 0) marlin.idle_no_sleep();  // heaters, LCD; Y waits meanwhile
+    }
+    Y_DIR_WRITE(old_dir);
+    DELAY_US(100);
+
+    SERIAL_ECHOPGM("PAD_SCRAPE: wipe Y", p_float_t(y_now, 1), "->", p_float_t(motion.position.y + float(y_moved) / spm_y, 1),
+                   " at contact-", p_float_t(depth, 2), " mm: samples=", n);
+    if (n) SERIAL_ECHOPGM(" load min/avg/max=", fmin, "/", int32_t(fsum / int64_t(n)), "/", fmax);
+    SERIAL_ECHOLNPGM(" (~100 counts/g; soft ", c.soft, " hard ", c.hard, ") jumps=", jumps);
+    if (err) return pad_fail(err);
+    return !pad_err;
+  }
+
+  /**
+   * Over to the wipe start at travel height, free reference there, then the two wipe segments.
+   * zs: height (steps) above the rough contact, kept exact. false = failed (pad_err set).
+   */
+  [[nodiscard]] static bool pad_scrape_run(const PadScrapeParams &p, const int32_t base, long &zs, long &y_moved) {
+    pad_z_to(zs, pad_steps(TRAVEL_MM));                // lift off the rough spot
+    motion.blocking_move_xy(p.x, p.y0, 80);            // at travel height (planner: X/Y only)
+    planner.synchronize();
+    if (!pad_check(0)) return false;
+    safe_delay(300);
+
+    // ---- Free reference in the air, checked against the baseline taken before the rough touch ----
+    pad_reader_reset();
+    PadStats r;
+    if (!pad_baseline<16>(F("reference noisy"), r)) return false;
+    SERIAL_ECHOLNPGM("PAD_SCRAPE: reference=", r.avg, " baseline=", base, " noise=", r.noise);
+    if (pad_abs(r.avg - base) > SCRAPE_REF_TOL) return pad_fail(F("reference does not match the baseline"));
+
+    ui.set_status(F("Pad Z homing: wiping nozzle"));
+    stepper.enable_axis(Y_AXIS);
+    const PadWipeCtl c = { p.soft, p.hard, pad_steps(p.jump), -pad_steps(SCRAPE_FLOOR_MM), pad_steps(SCRAPE_CEIL_MM) };
+    bool ended = false;
+    if (!pad_wipe(p, c, r.avg, p.depth1, p.ymid, zs, y_moved, ended)) return false;
+    if (!ended && !pad_wipe(p, c, r.avg, p.depth2, p.y1, zs, y_moved, ended)) return false;
+    return ended ? pad_fail(F("load limit, wipe ended early")) : true;
+  }
+
+  /**
+   * The wipe, from the rough contact on the strip (zs = height above it, steps). Always ends at
+   * least TRAVEL_MM over that contact with motion.position X/Y matching the steppers.
+   * true = done or skipped (a warning; pad_err cleared). false = homing must fail (stopped,
+   * interrupted); pad_err set, nothing left to lift.
+   */
+  [[nodiscard]] static bool pad_scrape(const PadScrapeParams &p, const int32_t base, long &zs) {
+    SERIAL_ECHOLNPGM("PAD_SCRAPE: wipe X", p_float_t(p.x, 1), " Y", p_float_t(p.y0, 1), "->", p_float_t(p.ymid, 1),
+                     " at contact-", p_float_t(p.depth1, 2), ", ->", p_float_t(p.y1, 1), " at contact-", p_float_t(p.depth2, 2),
+                     " mm, soft ", p.soft, " (jump ", p_float_t(p.jump, 2), " mm) hard ", p.hard);
+    long y_moved = 0;
+    pad_err = nullptr;
+    const bool ok = pad_scrape_run(p, base, zs, y_moved);
+    pad_z_to(zs, _MAX(zs, pad_steps(TRAVEL_MM)));      // lift-off at the far end (or where it stopped)
+    // Stopped, killed or something queued a move: homing must fail. Anything else only skips the wipe.
+    const bool fatal = !ok && (pad_err_stopped || !marlin.isRunning() || planner.has_blocks_queued());
+
+    // Direct Y steps into the position. Something queued meanwhile (pad_check failed) may have run:
+    // drop it and take the steppers' counts first.
+    if (planner.has_blocks_queued()) {
+      planner.quick_stop();
+      planner.synchronize();
+      motion.set_current_from_steppers_for_axis(ALL_AXES_ENUM);
+    }
+    motion.position.y += float(y_moved) / planner.settings.axis_steps_per_mm[Y_AXIS];
+    motion.sync_plan_position();
+
+    if (ok) { SERIAL_ECHOLNPGM("PAD_SCRAPE: done"); return true; }
+    if (!pad_err) pad_err = F("unknown");
+    pad_err_down = 0;                                  // already lifted
+    if (fatal) return false;
+    SERIAL_ECHOLN(F("PAD_SCRAPE: WARNING: wipe incomplete: "), pad_err);
+    ui.set_status(F("Pad Z homing: wipe incomplete"));
+    pad_err = nullptr;
+    return true;
+  }
+
+#endif // PAD_SCRAPE
+
 // The homing itself. false = failed, pad_err/pad_err_down say why and where.
 [[nodiscard]] static bool pad_home_run(const int16_t restore_nozzle, const int16_t restore_bed) {
   if (motion.axes_should_home(_BV(X_AXIS) | _BV(Y_AXIS)) || !motion.axis_is_trusted(X_AXIS) || !motion.axis_is_trusted(Y_AXIS))
@@ -391,17 +659,27 @@ template<uint8_t N>
   motion.sync_plan_position();
   if (!pad_heat_and_wait()) return false;
 
+  #if ENABLED(PAD_SCRAPE)
+    // Hot enough to extrude: the tip can carry a blob. Then the rough touch is on the scrape strip
+    // (a squashed blob lands where it is scraped next) and the pad spot stays untouched until the
+    // nozzle is clean.
+    const bool scrape = !thermalManager.tooColdToExtrude(0);
+    const float first_x = scrape ? float(PAD_SCRAPE_X) : float(AUTOZ_TOOL_X),
+                first_y = scrape ? float(PAD_SCRAPE_ROUGH_Y) : float(AUTOZ_TOOL_Y);
+  #endif
+
   // X/Y only, at the current height (G28 has already raised Z)
   motion.sync_plan_position();
-  motion.blocking_move_xy(float(AUTOZ_TOOL_X), float(AUTOZ_TOOL_Y), 80);
+  motion.blocking_move_xy(TERN(PAD_SCRAPE, first_x, float(AUTOZ_TOOL_X)), TERN(PAD_SCRAPE, first_y, float(AUTOZ_TOOL_Y)), 80);
   planner.synchronize();
   if (!pad_check(0)) return false;
   stepper.enable_axis(Z_AXIS);
   safe_delay(300);
 
   // ---- Wait for the gauge to stop drifting (a freshly heated bed drifts up to ~300 counts/s) ----
+  // (Not before the rough touch on the strip: the descent tracks drift; the settle comes before the precise homing.)
   pad_reader_reset();
-  if (!pad_wait_settled()) return false;
+  if (TERN1(PAD_SCRAPE, !scrape) && !pad_wait_settled()) return false;
 
   // ---- Sensor health, before any descent ----
   const millis_t t0 = millis();
@@ -411,43 +689,46 @@ template<uint8_t N>
                    " sample_ms=", (millis() - t0) / 33);
 
   // ---- Coarse descent ----
-  const long coarse_n = pad_steps(COARSE_STEP_MM);
   float max_mm = Z_MAX_POS + 10;
   if (z_known) NOMORE(max_mm, _MAX(z_entry, 0.0f) + KNOWN_Z_MARGIN_MM);
   const long max_n = pad_steps(max_mm);
   SERIAL_ECHOLNPGM("PAD_HOME: descending, travel limit ", p_float_t(max_mm, 1), z_known ? " mm (Z was known)" : " mm (Z unknown)");
   ui.set_status(F("Pad Z homing: descending"));
-  long travelled = 0;
-  float track = base.avg;                              // follows slow (thermal) drift, bounded
-  int32_t d, v;
-  uint8_t glitches = 0;
-  for (;;) {
-    if (!pad_check(travelled)) return false;
-    if (travelled + coarse_n > max_n) return pad_fail(F("no pad contact (max travel)"), travelled);
-    pad_step_z(coarse_n, false);
-    travelled += coarse_n;
-
-    if (!pad_sample(travelled, v)) return false;
-    d = pad_abs(v - int32_t(track));
-    if (d > PAD_COARSE_TRIGGER) {
-      // Re-read without moving: a real load is still there, a glitch is not
-      int32_t v2;
-      if (!pad_sample(travelled, v2)) return false;
-      d = _MIN(d, pad_abs(v2 - int32_t(track)));
-      if (d > PAD_COARSE_TRIGGER) break;
-      if (++glitches > 10) return pad_fail(F("sensor glitches in descent"), travelled);
-    }
-    else if (d < (PAD_COARSE_TRIGGER) / 4) {
-      track += float(v - int32_t(track)) * (1.0f / 32.0f);
-      // Bounded so a broken sensor can't wander off forever; a real contact is a fast jump,
-      // which this gate (d < trigger/4, gain 1/32 per sample) never follows.
-      track = constrain(track, float(base.avg - DRIFT_TRACK_MAX), float(base.avg + DRIFT_TRACK_MAX));
-    }
-    marlin.idle_no_sleep();                            // heaters, watchdog, LCD
-  }
+  long travelled;
+  float track;                                         // follows slow (thermal) drift, bounded
+  int32_t d;
+  uint8_t glitches;
+  if (!pad_descend(base.avg, TERN(PAD_SCRAPE, scrape ? int32_t(PAD_SCRAPE_TRIGGER) : int32_t(PAD_COARSE_TRIGGER), PAD_COARSE_TRIGGER),
+                   max_n, F("no pad contact (max travel)"), travelled, track, d, glitches)) return false;
 
   SERIAL_ECHOLNPGM("PAD_HOME: coarse contact after ", p_float_t(float(travelled) / spm, 2),
                    " mm, delta=", d, " drift=", int32_t(track) - base.avg, " glitches=", glitches);
+
+  #if ENABLED(PAD_SCRAPE)
+    long pre_n = 0,                                    // steps from the entry height down to the precise descent start
+         zs = 0;                                       // height above the rough contact (steps)
+    if (scrape) {
+      // That was the rough touch, on the strip: scrape from here, then home on the clean pad spot
+      SERIAL_ECHOLNPGM("PAD_SCRAPE: rough touch on the strip at X", p_float_t(first_x, 1), " Y", p_float_t(first_y, 1));
+      if (!pad_scrape(pad_scrape_defaults(), base.avg, zs)) return false;
+      pad_scraped = true;
+      pre_n = travelled - zs;
+
+      // Over the pad spot at travel height (from the wipe's far end; the pad spot is untouched so far)
+      ui.set_status(F("Pad Z homing: descending"));
+      motion.blocking_move_xy(float(AUTOZ_TOOL_X), float(AUTOZ_TOOL_Y), 80);
+      planner.synchronize();
+      if (!pad_check(0)) return false;
+      safe_delay(300);
+      // Settle (quick when the gauge is already calm), then a fresh baseline in the air
+      if (!pad_wait_settled(true) || !pad_baseline<32>(F("sensor noisy or loaded"), base)) return false;
+      SERIAL_ECHOLNPGM("PAD_HOME: precise spot X", AUTOZ_TOOL_X, " Y", AUTOZ_TOOL_Y, ", baseline=", base.avg, " noise=", base.noise);
+      if (!pad_descend(base.avg, PAD_COARSE_TRIGGER, zs + pad_steps(PRECISE_MARGIN_MM), F("no pad contact (max travel)"),
+                       travelled, track, d, glitches)) return false;
+      SERIAL_ECHOLNPGM("PAD_HOME: coarse contact after ", p_float_t(float(travelled) / spm, 2),
+                       " mm, delta=", d, " drift=", int32_t(track) - base.avg, " glitches=", glitches);
+    }
+  #endif
 
   // ---- Back off; the sensor must relax ----
   const long backoff_n = pad_steps(BACKOFF_MM);
@@ -461,7 +742,7 @@ template<uint8_t N>
     // A heated gauge keeps ~1% of a load for a while after it is removed (measured), so only a
     // residual as large as the trigger itself means the nozzle is still pressing. Each fine pass
     // takes its own fresh baseline.
-    if (pad_abs(residual) > (PAD_COARSE_TRIGGER)) return pad_fail(F("pad still loaded after backoff"), travelled - backoff_n);
+    if (pad_abs(residual) > (PAD_COARSE_TRIGGER)) return PAD_FAIL_DIRTY(F("pad still loaded after backoff"), travelled - backoff_n);
   }
 
   // ---- Fine passes, from the backed-off position ----
@@ -470,17 +751,22 @@ template<uint8_t N>
   long c[FINE_PASSES];
   for (uint8_t i = 0; i < FINE_PASSES; ++i) {
     if (!pad_fine_pass(i + 1, fine_n, backoff_n + window_n, c[i])) return false;
-    if (c[i] < backoff_n - window_n) return pad_fail(F("fine pass: early trigger"));   // not the coarse contact
+    if (c[i] < backoff_n - window_n) return PAD_FAIL_DIRTY(F("fine pass: early trigger"));   // not the coarse contact
     for (uint8_t j = i; j > 0 && c[j - 1] > c[j]; --j) { const long t = c[j]; c[j] = c[j - 1]; c[j - 1] = t; }
   }
   const float spread_mm = float(c[FINE_PASSES - 1] - c[0]) / spm,
               above_mm  = float(c[FINE_PASSES / 2]) / spm;   // median height above the contact
   SERIAL_ECHOLNPGM("PAD_HOME: median_mm=", p_float_t(above_mm, 3), " spread_mm=", p_float_t(spread_mm, 3));
-  if (spread_mm > MAX_SPREAD_MM) return pad_fail(F("fine passes disagree"));
+  if (spread_mm > MAX_SPREAD_MM) return PAD_FAIL_DIRTY(F("fine passes disagree"));
+  #if ENABLED(PAD_SCRAPE)
+    // The nozzle is above_mm over the pad contact; the rough contact is travelled - backoff_n - zs steps above the nozzle
+    if (scrape) SERIAL_ECHOLNPGM("PAD_SCRAPE: strip contact at the rough spot was Z",
+                                 p_float_t(above_mm + float(travelled - backoff_n - zs) / spm, 3), " (relative to the pad contact)");
+  #endif
 
   if (z_known)
     SERIAL_ECHOLNPGM("PAD_HOME: contact moved by ",
-      p_float_t(z_entry - float(travelled - backoff_n) / spm - above_mm - z_shift, 3), " mm since the previous homing");
+      p_float_t(z_entry - float(TERN0(PAD_SCRAPE, pre_n) + travelled - backoff_n) / spm - above_mm - z_shift, 3), " mm since the previous homing");
 
   // ---- The nozzle is above_mm over the contact: define Z (as set_axis_is_at_home does) ----
   motion.position.z = above_mm + z_shift;
@@ -525,11 +811,21 @@ static void pad_abort() {
   #endif
 
   SERIAL_ERROR_START();
+  #if ENABLED(PAD_SCRAPE)
+    // The scrape did not clean the tip: say so rather than only what the measurement saw
+    const bool dirty = pad_scraped && pad_err_dirty;
+    if (dirty) SERIAL_ECHOLN(F("PAD_HOME: FAILED: nozzle still dirty after scrape ("), pad_err, F(")"));
+    else
+  #endif
   SERIAL_ECHOLN(F("PAD_HOME: FAILED: "), pad_err);
 
   char msg[64];
   strcpy(msg, "Pad Z homing FAILED: ");
-  strncat(msg, FTOP(pad_err), sizeof(msg) - strlen(msg) - 1);
+  #if ENABLED(PAD_SCRAPE)
+    strncat(msg, dirty ? "nozzle still dirty after scrape" : FTOP(pad_err), sizeof(msg) - strlen(msg) - 1);
+  #else
+    strncat(msg, FTOP(pad_err), sizeof(msg) - strlen(msg) - 1);
+  #endif
   ui.set_status(msg, true);
   #if ENABLED(DWIN_CREALITY_LCD)
     // Info screen; the knob returns to the main menu. Not when the print was stopped
@@ -545,6 +841,7 @@ bool pad_home_z() {
   pad_err = nullptr;
   pad_err_down = 0;
   pad_err_stopped = false;
+  TERN_(PAD_SCRAPE, pad_scraped = pad_err_dirty = false);
 
   // Targets to restore afterwards: those from before G28 (off if they were off)
   const bool had_preheat = saved_nozzle >= 0;
@@ -580,5 +877,118 @@ void pad_sensor_report(const uint8_t seconds) {
   if (err) SERIAL_ECHOLN(F("PAD_TEST: FAILED: "), err);
   else SERIAL_ECHOLNPGM("PAD_TEST: end (trigger fine/coarse=", PAD_FINE_TRIGGER, "/", PAD_COARSE_TRIGGER, " noise max=", PAD_NOISE_MAX, ")");
 }
+
+#if ENABLED(PAD_SCRAPE)
+
+  bool pad_scrape_done() { return pad_scraped; }
+
+  // End of the wipe + homing sequence: the print start point, reached from travel height (leveling as G28 left it)
+  void pad_scrape_end_move() {
+    const feedRate_t fz = motion.homing_feedrate(Z_AXIS);
+    motion.blocking_move_z(_MAX(motion.position.z, motion.logical_to_native(TRAVEL_MM, Z_AXIS)), fz);
+    motion.blocking_move_xy(motion.logical_to_native(PAD_SCRAPE_END_X, X_AXIS), motion.logical_to_native(PAD_SCRAPE_END_Y, Y_AXIS),
+                            motion.homing_feedrate(X_AXIS));
+    motion.blocking_move_z(motion.logical_to_native(PAD_SCRAPE_END_Z, Z_AXIS), fz);
+    planner.synchronize();
+    SERIAL_ECHOLNPGM("PAD_SCRAPE: at the start point X", PAD_SCRAPE_END_X, " Y", PAD_SCRAPE_END_Y, " Z", PAD_SCRAPE_END_Z);
+  }
+
+  // M8016: rough touch + wipe alone, for tuning. Z homed; leveling off meanwhile; X/Y/Z stay exact.
+  void pad_scrape_only(const PadScrapeParams &p) {
+    if (motion.axes_should_home(_BV(X_AXIS) | _BV(Y_AXIS) | _BV(Z_AXIS))
+      || !motion.axis_is_trusted(X_AXIS) || !motion.axis_is_trusted(Y_AXIS) || !motion.axis_is_trusted(Z_AXIS)) {
+      SERIAL_ECHOLNPGM("PAD_SCRAPE: home first (G28)");
+      return;
+    }
+    planner.synchronize();
+    pad_err = nullptr;
+    pad_err_down = 0;
+    pad_err_stopped = false;
+    if (thermalManager.tooColdToExtrude(0)) SERIAL_ECHOLNPGM("PAD_SCRAPE: note: the nozzle is cold");
+    ui.set_status(F("Pad scrape"));
+    #if HAS_LEVELING
+      const bool leveling_was = planner.leveling_active;
+      set_bed_leveling_enabled(false);
+    #endif
+
+    // Native Z of the expected strip contact: homed contact (+ M206 Z) + p.contact
+    const float spm = pad_spm(), za = TERN0(HAS_HOME_OFFSET, motion.home_offset.z) + p.contact;
+    if (motion.position.z < za + TRAVEL_MM) motion.blocking_move_z(za + TRAVEL_MM, motion.homing_feedrate(Z_AXIS));
+    motion.blocking_move_xy(p.x, p.rough_y, 80);
+    planner.synchronize();
+    stepper.enable_axis(Z_AXIS);
+    const float z_start = motion.position.z;
+    const long zs0 = lroundf((z_start - za) * spm);
+    long zs = zs0;                                     // height over the expected contact (steps)
+    safe_delay(300);
+    pad_reader_reset();
+
+    // Free reference here, then the rough touch: down to SCRAPE_SEARCH_MM under the expected height
+    bool ok = true;
+    PadStats b;
+    long down = 0;
+    float track;
+    int32_t d;
+    uint8_t glitches;
+    if (!pad_baseline<16>(F("sensor noisy or loaded"), b))
+      SERIAL_ECHOLN(F("PAD_SCRAPE: WARNING: not started: "), pad_err);
+    else {
+      SERIAL_ECHOLNPGM("PAD_SCRAPE: baseline=", b.avg, " noise=", b.noise, ", rough touch at X", p_float_t(p.x, 1), " Y", p_float_t(p.rough_y, 1));
+      const bool touched = pad_descend(b.avg, PAD_SCRAPE_TRIGGER, zs + pad_steps(SCRAPE_SEARCH_MM), F("no strip contact in range"), down, track, d, glitches);
+      zs -= down;
+      if (touched) {
+        SERIAL_ECHOLNPGM("PAD_SCRAPE: rough contact at Z", p_float_t(float(zs) / spm + p.contact, 3), " delta=", d, " drift=", int32_t(track) - b.avg);
+        long zr = 0;                                   // height over the rough contact
+        ok = pad_scrape(p, b.avg, zr);
+        zs += zr;
+      }
+      else {
+        pad_z_to(zs, zs0);
+        ok = !(pad_err_stopped || !marlin.isRunning() || planner.has_blocks_queued());
+        if (ok) SERIAL_ECHOLN(F("PAD_SCRAPE: WARNING: not started: "), pad_err);
+      }
+    }
+
+    if (planner.has_blocks_queued()) { planner.quick_stop(); planner.synchronize(); } // only after a failure; then unhomed below
+    motion.position.z = z_start + float(zs - zs0) / spm;  // the direct Z steps
+    motion.sync_plan_position();
+    if (!ok) {
+      SERIAL_ERROR_START();
+      SERIAL_ECHOLN(F("PAD_SCRAPE: FAILED: "), pad_err, F(" (home again)"));
+      motion.set_all_unhomed();
+    }
+    TERN_(HAS_LEVELING, set_bed_leveling_enabled(leveling_was));
+    ui.reset_status();
+    motion.report_position();
+  }
+
+#endif // PAD_SCRAPE
+
+#if PAD_MESH_NORMALIZE
+
+  bool pad_mesh_probe(float &ref, const uint8_t verbose) {
+    ref = NAN;
+    const xy_pos_t pad = { float(AUTOZ_TOOL_X), float(AUTOZ_TOOL_Y) };
+    if (!probe.can_reach(pad)) {
+      SERIAL_ECHOLNPGM("PAD_MESH: the probe can't reach the pad spot; the mesh is interpolated there");
+      return true;
+    }
+    SERIAL_ECHOLNPGM("PAD_MESH: probing the pad spot X", AUTOZ_TOOL_X, " Y", AUTOZ_TOOL_Y);
+    ref = probe.probe_at_point(pad, PROBE_PT_RAISE, verbose);
+    return !isnan(ref);
+  }
+
+  void pad_mesh_normalize(float ref) {
+    const bool probed = !isnan(ref);
+    if (!probed) ref = bedlevel.get_z_correction(xy_pos_t({ float(AUTOZ_TOOL_X), float(AUTOZ_TOOL_Y) }));
+    if (!isfinite(ref)) { SERIAL_ECHOLNPGM("PAD_MESH: no bed height at the pad spot, mesh left as probed"); return; }
+    GRID_LOOP(x, y) bedlevel.z_values[x][y] -= ref;
+    bedlevel.refresh_bed_level();
+    SERIAL_ECHOPGM("PAD_MESH: bed at the pad spot ", p_float_t(ref, 3));
+    SERIAL_ECHO(probed ? F(" mm (probed)") : F(" mm (from the mesh)"));
+    SERIAL_ECHOLNPGM(", mesh shifted by ", p_float_t(-ref, 3), " mm: 0 at the pad, independent of M851 Z");
+  }
+
+#endif // PAD_MESH_NORMALIZE
 
 #endif // PAD_Z_HOMING

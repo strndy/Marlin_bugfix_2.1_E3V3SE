@@ -193,7 +193,7 @@
  
  #if defined(DISPLAY_SLEEP_MINUTES) || defined(LCD_BACKLIGHT_TIMEOUT_MINS)
    #define EDITABLE_DISPLAY_TIMEOUT      // Edit sleep / backlight timeout with M255 S<minutes> and a menu item
-@@ -2464,6 +2479,41 @@
+@@ -2464,6 +2479,68 @@
    #endif
  #endif
  
@@ -230,12 +230,39 @@
 +  // start G-code before G28) are used, otherwise these defaults. Both are waited for, then restored.
 +  #define PAD_HOME_NOZZLE_TEMP 220 // (°C) Default nozzle temperature. 0 = touch cold, no heating at all.
 +  #define PAD_HOME_BED_TEMP     50 // (°C) Default bed temperature. 0 = do not heat the bed.
++
++  // Wipe the nozzle before homing (EXPERIMENTAL, README "Pad Z homing"). With a nozzle hot enough to
++  // extrude, G28 homes Y then X, retracts, touches roughly on the scrape strip (PAD_SCRAPE_X,
++  // PAD_SCRAPE_ROUGH_Y), wipes the nozzle along the strip at set depths below that contact with the
++  // load watched live (over PAD_SCRAPE_SOFT: jump up PAD_SCRAPE_JUMP and go on; over
++  // PAD_SCRAPE_FORCE_MAX: lift, wipe ended), lifts at PAD_SCRAPE_Y1, homes precisely on the pad and
++  // goes to the print start point PAD_SCRAPE_END_X/Y/Z. M8016 runs the rough touch and the wipe alone.
++  // Loads in HX711 counts (~100 per gram).
++  //#define PAD_SCRAPE
++  #if ENABLED(PAD_SCRAPE)
++    #define HOME_Y_BEFORE_X              // Y first, then X: the nozzle ends next to the strip
++    #define PAD_SCRAPE_X          -5     // (mm) Strip X: left of the sheet, on the bed plate
++    #define PAD_SCRAPE_ROUGH_Y    10     // (mm) Rough touch Y
++    #define PAD_SCRAPE_Y0         50     // (mm) Wipe start
++    #define PAD_SCRAPE_YMID       40     // (mm) Depth change
++    #define PAD_SCRAPE_Y1         20     // (mm) Wipe end; the nozzle lifts off here
++    #define PAD_SCRAPE_DEPTH1      0.1   // (mm) Wipe depth below the rough contact, Y0..YMID (max 0.4)
++    #define PAD_SCRAPE_DEPTH2      0.2   // (mm) Wipe depth below the rough contact, YMID..Y1 (max 0.4)
++    #define PAD_SCRAPE_JUMP        0.1   // (mm) Jump up when the load passes PAD_SCRAPE_SOFT
++    #define PAD_SCRAPE_SOFT    20000     // Soft load limit (~200 g)
++    #define PAD_SCRAPE_FORCE_MAX 35000   // Hard load limit (~350 g): lift at once, wipe ended
++    #define PAD_SCRAPE_TRIGGER  2500     // Contact threshold of the rough touch on the strip
++    #define PAD_SCRAPE_RETRACT     2     // (mm) Filament pulled back before the first touch (logical E unchanged)
++    #define PAD_SCRAPE_END_X       0     // (mm) G28 ends here (the print start point) instead of raising Z,
++    #define PAD_SCRAPE_END_Y       0     //      reached at travel height, then lowered to PAD_SCRAPE_END_Z
++    #define PAD_SCRAPE_END_Z     0.1
++  #endif
 +#endif
 +
  // @section extruder
  
  /**
-@@ -2578,7 +2628,11 @@
+@@ -2578,7 +2655,11 @@
    #define PROBING_MARGIN_LEFT PROBING_MARGIN
    #define PROBING_MARGIN_RIGHT PROBING_MARGIN+10
    #define PROBING_MARGIN_FRONT PROBING_MARGIN
@@ -247,7 +274,7 @@
  #endif
  
  #if ANY(MESH_BED_LEVELING, AUTO_BED_LEVELING_UBL)
-@@ -3463,6 +3517,10 @@
+@@ -3463,6 +3544,10 @@
    #define  X_SLAVE_ADDRESS 0x03
    #define  Y_SLAVE_ADDRESS 0x03
    #define  Z_SLAVE_ADDRESS 0x03
@@ -258,7 +285,7 @@
    //#define X2_SLAVE_ADDRESS 0
    //#define Y2_SLAVE_ADDRESS 0
    //#define Z2_SLAVE_ADDRESS 0
-@@ -3474,7 +3532,7 @@
+@@ -3474,7 +3559,7 @@
    //#define  U_SLAVE_ADDRESS 0
    //#define  V_SLAVE_ADDRESS 0
    //#define  W_SLAVE_ADDRESS 0
@@ -267,7 +294,7 @@
    //#define E1_SLAVE_ADDRESS 0
    //#define E2_SLAVE_ADDRESS 0
    //#define E3_SLAVE_ADDRESS 0
-@@ -4265,9 +4323,7 @@
+@@ -4265,9 +4350,7 @@
  #if ENABLED(GCODE_MACROS)
    #define GCODE_MACROS_SLOTS       5  // Up to 10 may be used
    #define GCODE_MACROS_SLOT_SIZE  50  // Maximum length of a single macro
@@ -277,7 +304,7 @@
  #endif
  
  /**
-@@ -4562,9 +4618,7 @@
+@@ -4562,9 +4645,7 @@
  #if ENABLED(FREEZE_FEATURE)
    //#define FREEZE_PIN   -1   // Override the default (KILL) pin here
    #define FREEZE_STATE  LOW   // State of pin indicating freeze
@@ -287,7 +314,7 @@
    /**
     * Command P000 (REALTIME_REPORTING_COMMANDS and EMERGENCY_PARSER) or
     * FREEZE_PIN (FREEZE_FEATURE) initiates a soft feed hold that keeps
-@@ -4577,9 +4631,7 @@
+@@ -4577,9 +4658,7 @@
     * NOTE: Affects Laser PWM but DOES NOT pause Spindle, Fans, Heaters or other devices.
     */
    //#define SOFT_FEED_HOLD

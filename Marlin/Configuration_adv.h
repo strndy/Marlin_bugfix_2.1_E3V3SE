@@ -2513,6 +2513,33 @@
   // start G-code before G28) are used, otherwise these defaults. Both are waited for, then restored.
   #define PAD_HOME_NOZZLE_TEMP 220 // (°C) Default nozzle temperature. 0 = touch cold, no heating at all.
   #define PAD_HOME_BED_TEMP     50 // (°C) Default bed temperature. 0 = do not heat the bed.
+
+  // Wipe the nozzle before homing (EXPERIMENTAL, README "Pad Z homing"). With a nozzle hot enough to
+  // extrude, G28 homes Y then X, retracts, touches roughly on the scrape strip (PAD_SCRAPE_X,
+  // PAD_SCRAPE_ROUGH_Y), wipes the nozzle along the strip at set depths below that contact with the
+  // load watched live (over PAD_SCRAPE_SOFT: jump up PAD_SCRAPE_JUMP and go on; over
+  // PAD_SCRAPE_FORCE_MAX: lift, wipe ended), lifts at PAD_SCRAPE_Y1, homes precisely on the pad and
+  // goes to the print start point PAD_SCRAPE_END_X/Y/Z. M8016 runs the rough touch and the wipe alone.
+  // Loads in HX711 counts (~100 per gram).
+  //#define PAD_SCRAPE
+  #if ENABLED(PAD_SCRAPE)
+    #define HOME_Y_BEFORE_X              // Y first, then X: the nozzle ends next to the strip
+    #define PAD_SCRAPE_X          -5     // (mm) Strip X: left of the sheet, on the bed plate
+    #define PAD_SCRAPE_ROUGH_Y    10     // (mm) Rough touch Y
+    #define PAD_SCRAPE_Y0         50     // (mm) Wipe start
+    #define PAD_SCRAPE_YMID       40     // (mm) Depth change
+    #define PAD_SCRAPE_Y1         20     // (mm) Wipe end; the nozzle lifts off here
+    #define PAD_SCRAPE_DEPTH1      0.1   // (mm) Wipe depth below the rough contact, Y0..YMID (max 0.4)
+    #define PAD_SCRAPE_DEPTH2      0.2   // (mm) Wipe depth below the rough contact, YMID..Y1 (max 0.4)
+    #define PAD_SCRAPE_JUMP        0.1   // (mm) Jump up when the load passes PAD_SCRAPE_SOFT
+    #define PAD_SCRAPE_SOFT    20000     // Soft load limit (~200 g)
+    #define PAD_SCRAPE_FORCE_MAX 35000   // Hard load limit (~350 g): lift at once, wipe ended
+    #define PAD_SCRAPE_TRIGGER  2500     // Contact threshold of the rough touch on the strip
+    #define PAD_SCRAPE_RETRACT     2     // (mm) Filament pulled back before the first touch (logical E unchanged)
+    #define PAD_SCRAPE_END_X       0     // (mm) G28 ends here (the print start point) instead of raising Z,
+    #define PAD_SCRAPE_END_Y       0     //      reached at travel height, then lowered to PAD_SCRAPE_END_Z
+    #define PAD_SCRAPE_END_Z     0.1
+  #endif
 #endif
 
 // @section extruder

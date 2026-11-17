@@ -184,6 +184,7 @@ Some options depend on others. For example, `ONE_CLICK_PRINT` requires `NO_SD_AU
 | OctoPrint plugin layer | `OCTOPRINT_PLUGIN` | `Configuration.h` (`c13_octoprint` only) |
 | One-click print | `ONE_CLICK_PRINT` | `Configuration_adv.h` |
 | Pad Z homing, experimental (off by default) | `PAD_Z_HOMING` | `Configuration.h`, thresholds `PAD_*` in `Configuration_adv.h` |
+| Nozzle wipe before pad Z homing, experimental (off by default, needs `PAD_Z_HOMING`) | `PAD_SCRAPE` | `Configuration_adv.h`, settings `PAD_SCRAPE_*` |
 | Power-loss recovery and LCD menu (off by default) | `POWER_LOSS_RECOVERY`, `DWIN_PLR_MENU` | `Configuration_adv.h` |
 | Preheat completion alert | `PREHEAT_ALERT` | `Configuration.h` |
 | Thumbnail rendering | `DWIN_RENDER_THUMBNAIL` | `Configuration.h` |
@@ -229,18 +230,40 @@ What `G28` does with the option on: heating starts together with the X/Y homing,
 4. Real test: nozzle about 20 mm above the bed, `G28`. Expect one touch, a 1 mm lift, three slow touches, then a lift. Power off if the nozzle keeps pushing into the bed. Afterwards send `M420 S0` and `G1 Z0.1 F300` and slide a sheet of paper under the nozzle: it should just drag.
 5. Repeatability: send `G28` five more times. From the second homing on, the line `PAD_HOME: contact moved by ... mm since the previous homing` should stay within a few hundredths of a millimetre, and `spread_mm` at 0.02 or less.
 
+### Nozzle wipe before homing (`PAD_SCRAPE`, experimental)
+
+Plastic on the nozzle tip makes the pad touch wrong (`fine passes disagree`). With `PAD_SCRAPE` (in `Configuration_adv.h`, off by default; GitHub Actions switch **PAD_SCRAPE**) and a nozzle hot enough to extrude, `G28` does:
+
+1. Heating starts; Y is homed, then X (`HOME_Y_BEFORE_X`); heat wait as above but **without the 30 s bed soak** (the bed soaks during the touch and wipe) and without the gauge settling (the rough descent tracks drift).
+2. Retract `PAD_SCRAPE_RETRACT` (2 mm; replaces the 1 mm retract, logical E unchanged).
+3. **Rough touch on the scrape strip** at `PAD_SCRAPE_X`/`PAD_SCRAPE_ROUGH_Y` (-5/10): the coarse descent only (free reference validated in the air first, contact by a fast change of more than `PAD_SCRAPE_TRIGGER` 2500 counts, confirmed by a second sample). A squashed blob lands on the strip, never on the pad.
+4. Lift 5 mm, over to `PAD_SCRAPE_Y0` (50) at that height, new free reference (must match the first within 8000 counts, else the wipe is skipped).
+5. **Wipe**: down to `PAD_SCRAPE_DEPTH1` (0.1 mm) below the rough contact (slowly, every step checked), Y50→`PAD_SCRAPE_YMID` (40); down to `PAD_SCRAPE_DEPTH2` (0.2 mm), Y40→`PAD_SCRAPE_Y1` (20), at 5 mm/s. Y and Z are stepped directly between HX711 samples (80/s), so the load is read live: over `PAD_SCRAPE_SOFT` (20000 counts, ~200 g) the nozzle jumps up `PAD_SCRAPE_JUMP` (0.1 mm) at once and goes on at that height; over `PAD_SCRAPE_FORCE_MAX` (35000, ~350 g), or still over the soft limit after jumping 1 mm above the contact, it lifts 5 mm and the wipe ends. It never goes deeper than 0.4 mm below the rough contact.
+6. Lift at Y20, travel 5 mm above the strip to the pad spot (25/28, untouched so far), the gauge settling (its first 6 points 0.5 s apart; a gauge already calm, under 100 counts per 2 s, passes after them in about 4 s, otherwise as above), a fresh baseline, then the normal precise homing. Heat wait happens once per `G28`.
+7. Instead of the raise to `Z_AFTER_HOMING`, `G28` ends at the print start point: up to Z5, over to `PAD_SCRAPE_END_X`/`PAD_SCRAPE_END_Y` (0/0), down to `PAD_SCRAPE_END_Z` (0.1, with the mesh applied). A cold nozzle (no wipe) ends as before.
+
+A wipe that cannot run (no contact in range, reference mismatch, noisy sensor, load limit) prints `PAD_SCRAPE: WARNING: wipe incomplete: <reason>` and homing goes on; it fails as usual if the tip is still dirty, then with `nozzle still dirty after scrape`. A stopped print or an interrupted move fails the homing as before. Log lines: `PAD_SCRAPE: reference=...`, `PAD_SCRAPE: wipe Y50.0->40.0 at contact-0.10 mm: samples=... load min/avg/max=... jumps=...`, and after homing `PAD_SCRAPE: strip contact at the rough spot was Z...` (relative to the pad contact). Reference from the first printer: on the strip ~60 g at contact-0.1, ~90 g at contact-0.2 with a clean nozzle.
+
+`M8016` runs steps 3–5 alone (X/Y/Z homed, leveling off meanwhile, positions stay exact; nothing is heated): `M8016 [X] [R<rough Y>] [Y<start>] [I<depth change Y>] [J<end>] [A<depth1>] [B<depth2>] [H<jump>] [S<soft>] [L<hard>] [F<mm/s>] [Z<expected strip height>]`. Defaults are the `PAD_SCRAPE_*` values. Tuning order:
+
+1. `M8015 T` with heaters on, as above.
+2. `M8016 Z10`: in the air. Goes to X-5 Y10 at Z15, takes the reference, descends to Z9 and stops with `no strip contact in range`. Check the direction and that nothing touches.
+3. `M8016 A0 B0 S8000`: touches and wipes at the contact height with a low soft limit; watch the `load` numbers.
+4. `M8016` with the defaults, then raise `A`/`B` or `S` in small steps if the loads stay low. Press the bed during a wipe: the nozzle must jump up (and lift on a hard press).
+
 ### Z offset and mesh
 
 - Z0 is the nozzle contact on the pad, plus `M206 Z` (stored with `M500`, applied at the next `G28`; positive = nozzle closer to the bed; limited to ±1 mm, a larger value makes `G28` fail).
-- The probe Z offset (`M851 Z`, LCD Z-offset) is **not** used for homing. It only matters while `G29` measures the mesh: an offset that is wrong by some amount shifts the whole stored mesh by that amount.
+- The probe Z offset (`M851 Z`, LCD Z-offset) is **not** used for homing. Since `G29` makes the mesh 0 at the pad spot (below), it does not matter for the mesh either.
 - Changing the Z-offset from the LCD during a print still moves the nozzle at once, but only until the next `G28`. To keep it, either re-run leveling with the probe on (the new offset is then part of the mesh), or put the correction into `M206 Z` and `M500`.
+- `G29` (and **Start Bed Leveling**, which runs it) probes the pad spot (25/28) once more after the grid and subtracts that height from the whole mesh, so the mesh is 0 where `G28` homes and the probe Z offset (`M851 Z`) and the probe's clip-on height cancel out (`PAD_MESH: bed at the pad spot ... mesh shifted by ...`). If the probe cannot reach the spot, the mesh value there is used instead. The shifted mesh is what is saved (`G29` saves the settings at its end in this firmware). The dots drawn on the LCD while probing are the raw values.
 - Making a mesh: clip the CR Touch on and plug it in (printer off), then use **Leveling → Start Bed Leveling** on the LCD or send `G28` + `G29`; the mesh is saved and is relative to the pad contact. Mesh view, mesh edit and `M420 S1` work as before. Power off, unplug the probe, print. `G28` re-enables the stored mesh by itself (`ENABLE_LEVELING_AFTER_G28`); `M420 S1` in the start G-code does no harm. Remove `G29` from the start G-code: with the probe unplugged it stops the printer with a probe error.
 
 ### Removed with the option on
 
 Everything that would use the probe without an explicit leveling request is taken out, because the probe may be unplugged:
 
-- **Automatic Z-offset**: the **Start Auto Z-Offset** row is gone from the Leveling menu and plain `M8015` only prints a notice (the routine assumes probe-homed Z and would drag the nozzle over the bed here). `M8015 T` still prints the sensor readings. The probe Z offset is therefore whatever is stored (`M851 Z`); an error in it is a constant mesh shift, corrected as described above.
+- **Automatic Z-offset**: the **Start Auto Z-Offset** row is gone from the Leveling menu and plain `M8015` only prints a notice (the routine assumes probe-homed Z and would drag the nozzle over the bed here). `M8015 T` still prints the sensor readings. The probe Z offset is therefore whatever is stored (`M851 Z`); `G29` cancels it out (see above).
 - **First-boot wizard** (language, automatic Z-offset, leveling): skipped. A fresh EEPROM boots to the main menu in English; set the language under Prepare.
 - **Level calibration before a print** (the toggle in the file preview): removed, a print start never probes.
 
