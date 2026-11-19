@@ -1408,6 +1408,9 @@ private:
 
   // #if ENABLED(USE_AUTOZ_TOOL_2)
     static void M8015();
+    #if ENABLED(PAD_SCRAPE)
+      static void M8016();
+    #endif
   // #endif
 
   static void T(const int8_t tool_index) IF_DISABLED(HAS_TOOLCHANGE, { UNUSED(tool_index); });

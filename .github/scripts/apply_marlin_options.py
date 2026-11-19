@@ -17,6 +17,7 @@ FILES = [Path("Marlin/Configuration.h"), Path("Marlin/Configuration_adv.h")]
 DEPENDS = {
     "DWIN_PLR_MENU": "POWER_LOSS_RECOVERY",
     "DWIN_SKEW_MENU": "SKEW_CORRECTION",
+    "PAD_SCRAPE": "PAD_Z_HOMING",
 }
 
 

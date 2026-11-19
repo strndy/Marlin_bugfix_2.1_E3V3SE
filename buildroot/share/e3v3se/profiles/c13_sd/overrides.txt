@@ -156,7 +156,6 @@ Configuration_adv.h E FAN_MIN_PWM 50
 Configuration_adv.h E E0_AUTO_FAN_PIN PC1
 Configuration_adv.h E BLTOUCH_DELAY 350
 Configuration_adv.h E BLTOUCH_HS_MODE true
-Configuration_adv.h E FT_MOTION
 Configuration_adv.h E FTM_IS_DEFAULT_MOTION
 Configuration_adv.h E FTM_DEFAULT_SHAPER_Y ftMotionShaper_3HEI
 Configuration_adv.h E FTM_SHAPING_DEFAULT_FREQ_Y 42.0f

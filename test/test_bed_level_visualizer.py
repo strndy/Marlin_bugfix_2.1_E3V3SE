@@ -47,6 +47,10 @@ int firmware_snprintf(char *text,size_t capacity,const char *format,...) {
 }
 #define snprintf firmware_snprintf
 #define ENABLED(V) (V)
+#define DISABLED(V) (!ENABLED(V))
+#ifndef PAD_Z_HOMING
+ #define PAD_Z_HOMING 0
+#endif
 #ifndef BED_LEVEL_VISUALIZER
  #define BED_LEVEL_VISUALIZER 1
 #endif

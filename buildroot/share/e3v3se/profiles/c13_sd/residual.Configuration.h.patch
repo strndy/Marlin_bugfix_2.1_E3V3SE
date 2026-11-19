@@ -8,7 +8,7 @@
  
  // @section serial
  
-@@ -120,21 +121,62 @@
+@@ -120,21 +121,70 @@
   * :[-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
   */
  //#define RS485_SERIAL_PORT 1
@@ -47,6 +47,11 @@
 +// |  *          *  |
 +#define D_ROUTINE_AUTO_OFFSET  // Enable this to calculate the Z offset automatically using the 4 points of the bed, (Delta) pattern
 +
++// Home Z by touching the nozzle on the bed strain-gauge pad (HX711) instead of the CR Touch,
++// so the probe can be unplugged for printing. The probe stays configured for G29.
++// EXPERIMENTAL: read README "Pad Z homing" before the first G28. Thresholds: PAD_* in Configuration_adv.h.
++//#define PAD_Z_HOMING
++
 +
 +#define USE_SWITCH_POWER_200W  0 //Default 1: Using a 200W power supply, the nozzle and heating bed cannot be heated at the same time. 0: The >200w power supply used has sufficient power and can be heated at the same time.
 +// #define CREALITY_LEVEL_COMPENSATION_ALGORITHM   1 //1 Use algorithm 0 Algorithm not applicable
@@ -71,10 +76,13 @@
 +// #define K8_EXTRUDER             0 //1 is K8 extruder 0 is Elf extruder
 +#define USER_LEVEL_CHECK        1 //Leveling calibration enable
 +#define WUHAN_CHENGE_PLATFORM   1 //Wuhan changed platform board 20230913_Rock
++#if ENABLED(PAD_Z_HOMING)
++  #undef USER_LEVEL_CHECK         // Never probe at print start: the CR Touch may be unplugged
++#endif
  
  // @section stepper drivers
  
-@@ -193,30 +235,18 @@
+@@ -193,30 +243,18 @@
   *
   * Regardless of these settings the axes are internally named I, J, K, U, V, W.
   */
@@ -105,7 +113,7 @@
  
  // @section extruder
  
-@@ -243,6 +273,17 @@
+@@ -243,6 +281,17 @@
    //#define SINGLENOZZLE_STANDBY_FAN
  #endif
  
@@ -123,7 +131,7 @@
  // A dual extruder that uses a single stepper motor
  //#define SWITCHING_EXTRUDER
  #if ENABLED(SWITCHING_EXTRUDER)
-@@ -310,7 +351,6 @@
+@@ -310,7 +359,6 @@
  
    #endif
  
@@ -131,7 +139,7 @@
  
  /**
   * Differential Extruder
-@@ -320,7 +360,6 @@
+@@ -320,7 +368,6 @@
   * Balanced: E steps = X + E/2 ; X steps = X - E/2  (Dual loop system)
   */
  //#define DIFFERENTIAL_EXTRUDER
@@ -139,7 +147,7 @@
    //#define BALANCED_DIFFERENTIAL_EXTRUDER
  #endif
  
-@@ -675,6 +714,8 @@
+@@ -675,6 +722,8 @@
  #define HEATER_7_MINTEMP   5
  #define BED_MINTEMP        0
  #define CHAMBER_MINTEMP    5
@@ -148,7 +156,7 @@
  
  // Above this temperature the heater will be switched off.
  // This can protect components from overheating, but NOT from shorts and failures.
-@@ -919,6 +960,9 @@
+@@ -919,6 +968,9 @@
    //#define DEFAULT_CHAMBER_KP  37.04
    //#define DEFAULT_CHAMBER_KI   1.40
    //#define DEFAULT_CHAMBER_KD 655.17
@@ -158,7 +166,7 @@
    // M309 P37.04 I1.04 D655.17
  
    // FIND YOUR OWN: "M303 E-2 C8 S50" to run autotune on the chamber at 50 degreesC for 8 cycles.
-@@ -954,6 +998,7 @@
+@@ -954,6 +1006,7 @@
   */
  #define PREVENT_LENGTHY_EXTRUDE
  #define EXTRUDE_MAXLENGTH 1000
@@ -166,7 +174,7 @@
  
  //===========================================================================
  //======================== Thermal Runaway Protection =======================
-@@ -974,6 +1019,7 @@
+@@ -974,6 +1027,7 @@
  
  #define THERMAL_PROTECTION_HOTENDS // Enable thermal protection for all extruders
  #define THERMAL_PROTECTION_BED     // Enable thermal protection for the heated bed
@@ -174,7 +182,7 @@
  #define THERMAL_PROTECTION_CHAMBER // Enable thermal protection for the heated chamber
  #define THERMAL_PROTECTION_COOLER  // Enable thermal protection for the laser cooling
  
-@@ -991,6 +1037,17 @@
+@@ -991,6 +1045,17 @@
  //#define COREYX
  //#define COREZX
  //#define COREZY
@@ -192,7 +200,7 @@
  
  //
  // MarkForged Kinematics
-@@ -1294,12 +1351,12 @@
+@@ -1294,12 +1359,12 @@
   * Endstop "Hit" State
   * Set to the state (HIGH or LOW) that applies to each endstop.
   */
@@ -211,7 +219,7 @@
  //#define I_MIN_ENDSTOP_HIT_STATE HIGH
  //#define I_MAX_ENDSTOP_HIT_STATE HIGH
  //#define J_MIN_ENDSTOP_HIT_STATE HIGH
-@@ -1312,7 +1369,7 @@
+@@ -1312,7 +1377,7 @@
  //#define V_MAX_ENDSTOP_HIT_STATE HIGH
  //#define W_MIN_ENDSTOP_HIT_STATE HIGH
  //#define W_MAX_ENDSTOP_HIT_STATE HIGH
@@ -220,7 +228,7 @@
  
  // Enable this feature if all enabled endstop pins are interrupt-capable.
  // This will remove the need to poll the interrupt pins, saving many CPU cycles.
-@@ -1432,6 +1489,11 @@
+@@ -1432,6 +1497,11 @@
      #define MAX_JERK_EDIT_VALUES { 20, 20, 0.6, 10 } // ...or, set your own edit limits
    #endif
  #endif
@@ -232,7 +240,7 @@
  
  /**
   * Junction Deviation Factor
-@@ -1532,12 +1594,10 @@
+@@ -1532,12 +1602,10 @@
   * Z Servo Probe, such as an endstop switch on a rotating arm.
   */
  //#define Z_PROBE_SERVO_NR 0
@@ -245,7 +253,7 @@
  
  /**
   * The BLTouch probe uses a Hall effect sensor and emulates a servo.
-@@ -1732,12 +1792,13 @@
+@@ -1732,12 +1800,13 @@
   *     O-- FRONT --+
   */
  //#define NOZZLE_TO_PROBE_OFFSET { 10, 10, 0 } // (mm) X, Y, Z distance from Nozzle tip to Probe trigger-point
@@ -261,7 +269,7 @@
  
  //#define PROBE_WAKEUP_TIME_MS  30    // (ms) Time for the probe to wake up
  
-@@ -1893,6 +1954,7 @@
+@@ -1893,6 +1962,7 @@
  //#define DISABLE_U
  //#define DISABLE_V
  //#define DISABLE_W
@@ -269,7 +277,7 @@
  
  // @section extruder
  
-@@ -1938,6 +2000,10 @@
+@@ -1938,6 +2008,10 @@
                                        // You'll need this much clearance above Z_MAX_POS to avoid grinding.
  
  #define Z_AFTER_HOMING         10   // (mm) Height to move to after homing (if Z was homed)
@@ -280,7 +288,7 @@
  //#define XY_AFTER_HOMING { 10, 10 }  // (mm) Move to an XY position after homing (and raising Z)
  
  //#define EVENT_GCODE_AFTER_HOMING "M300 P440 S200"  // Commands to run after G28 (and move to XY_AFTER_HOMING)
-@@ -1974,14 +2040,38 @@
+@@ -1974,14 +2048,38 @@
  // The size of the printable area
  #define X_BED_SIZE 220
  #define Y_BED_SIZE 220
@@ -319,7 +327,7 @@
  //#define I_MIN_POS 0
  //#define I_MAX_POS 50
  //#define J_MIN_POS 0
-@@ -2494,6 +2584,14 @@
+@@ -2494,6 +2592,14 @@
    #define XY_DIAG_AC 282.84
    #define XY_DIAG_BD 282.84
    #define XY_SIDE_AD 200.69
@@ -334,7 +342,7 @@
  
    // Or, set the XY skew factor directly:
    //#define XY_SKEW_FACTOR 0.0
-@@ -2579,6 +2677,23 @@
+@@ -2579,6 +2685,23 @@
  #define PREHEAT_2_TEMP_BED    70
  #define PREHEAT_2_TEMP_CHAMBER 35
  #define PREHEAT_2_FAN_SPEED     0 // Value from 0 to 255
@@ -358,7 +366,7 @@
  
  /**
   * @section nozzle park
-@@ -3642,10 +3757,9 @@
+@@ -3642,10 +3765,9 @@
  //#define DWIN_MARLINUI_PORTRAIT      // MarlinUI (portrait orientation)
  //#define DWIN_MARLINUI_LANDSCAPE     // MarlinUI (landscape orientation)
  

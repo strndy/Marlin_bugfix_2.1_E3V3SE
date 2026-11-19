@@ -1191,6 +1191,9 @@ void GcodeSuite::process_parsed_command(bool no_ok/*=false*/) {
       // #if ENABLED(USE_AUTOZ_TOOL_2)
         case 8015: M8015(); break; // M8015: One key to obtain the Z offset value
       // #endif
+      #if ENABLED(PAD_SCRAPE)
+        case 8016: M8016(); break; // M8016: nozzle scrape only (pad Z homing)
+      #endif
 
       default: parser.unknown_command_warning(); break;
     }
