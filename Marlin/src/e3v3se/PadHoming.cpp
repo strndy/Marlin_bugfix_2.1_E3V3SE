@@ -382,19 +382,28 @@ template<uint8_t N>
     marlin.idle_no_sleep();
   }
 
-  // First step of the uninterrupted rise above the knee (ring holds steps i-31..i)
+  // Contact = where the load crosses PAD_FINE_TRIGGER (a fixed force), interpolated between the last
+  // step below it and the step that reached it. A fixed-force point repeats far better than the start
+  // of the rise ("knee"), which drifted 0.03..0.23 mm from homing to homing on the real printer; the
+  // constant force offset is calibrated out once with M206 Z. The knee is still logged for reference.
   int32_t k = i;
   while (k > 1 && k - 1 > i - PAD_RING && ring[(k - 1) % PAD_RING] > knee) --k;
+  const int32_t d_prev = (i > 1 && i - 1 > i - PAD_RING) ? ring[(i - 1) % PAD_RING] : 0;
+  long cross = down;
+  if (d > d_prev && d_prev < int32_t(PAD_FINE_TRIGGER)) {
+    const float frac = float(d - int32_t(PAD_FINE_TRIGGER)) / float(d - d_prev);   // 0..1 of a step back
+    cross = down - lroundf(constrain(frac, 0.0f, 1.0f) * float(step_n));
+  }
 
   pad_step_z(down, true);                              // back to the start position
   safe_delay(150);
 
   SERIAL_ECHOLNPGM("PAD_HOME: fine #", pass, " base=", b.avg, " noise=", b.noise, " raw=", b.raw,
-                   " knee=", knee, " trig_delta=", d,
-                   " trig_mm=", p_float_t(float(down) / pad_spm(), 3),
-                   " contact_mm=", p_float_t((float(k) - 0.5f) * float(step_n) / pad_spm(), 3));
+                   " trig_delta=", d, " prev=", d_prev,
+                   " trig_mm=", p_float_t(float(cross) / pad_spm(), 3),
+                   " knee_mm=", p_float_t((float(k) - 0.5f) * float(step_n) / pad_spm(), 3));
 
-  contact = k * step_n - step_n / 2;
+  contact = cross;
   return true;
 }
 
