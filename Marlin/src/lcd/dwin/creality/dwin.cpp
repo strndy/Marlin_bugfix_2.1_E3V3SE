@@ -145,7 +145,18 @@ constexpr uint16_t TROWS = 6, MROWS = TROWS - 1, // Total rows, and other-than-B
 #endif
 
 #define font_offset 19
-#define BABY_Z_VAR TERN(HAS_BED_PROBE, probe.offset.z, dwin_zoffset)
+#if ENABLED(PAD_Z_HOMING)
+  // Pad Z homing: Z0 is the pad contact + M206 Z, so the LCD Z-offset is M206 Z, shown with the probe
+  // offset's sign (more negative = nozzle closer to the bed). Limited to the +-1 mm pad homing accepts.
+  // The probe Z offset (M851 Z) is not shown: G29 makes the mesh 0 at the pad, so it cancels out.
+  #define BABY_Z_VAR (-motion.home_offset.z)
+  #define LCD_ZOFF_MIN (-1)
+  #define LCD_ZOFF_MAX 1
+#else
+  #define BABY_Z_VAR TERN(HAS_BED_PROBE, probe.offset.z, dwin_zoffset)
+  #define LCD_ZOFF_MIN (PROBE_OFFSET_ZMIN)
+  #define LCD_ZOFF_MAX (PROBE_OFFSET_ZMAX)
+#endif
 
 char shift_name[101];
 char current_file_name[30];
@@ -617,6 +628,14 @@ static void Read_Boot_Step_Value()
 #endif
   // SERIAL_ECHOLNPGM(" HMI_flag.boot_step: ", HMI_flag.boot_step);
   // SERIAL_ECHOLNPGM(" HMI_flag.language: ", HMI_flag.language);
+  #if ENABLED(PAD_Z_HOMING)
+    // The first-boot wizard is language + automatic Z-offset + leveling, all of which
+    // need the CR Touch and move the printer. Treat it as done (the EEPROM is not changed).
+    if (HMI_flag.boot_step != Boot_Step_Max) {
+      HMI_flag.boot_step = Boot_Step_Max;
+      if (HMI_flag.language < Chinese || HMI_flag.language >= Language_Max) HMI_flag.language = English;
+    }
+  #endif
   if (HMI_flag.boot_step != Boot_Step_Max)
   {
     HMI_flag.Need_boot_flag = true; // Requires booting
@@ -1575,8 +1594,12 @@ inline bool Apply_Encoder(const ENCODER_DiffState &encoder_diffState, T &valref)
 #define CONTROL_CASE_PLR (CONTROL_CASE_STATS + ENABLED(DWIN_PLR_MENU))
 #define CONTROL_CASE_TOTAL CONTROL_CASE_PLR
 
-#define LEVEL_CASE_BEDVIS 4
-#define LEVEL_CASE_TOTAL (3 + ENABLED(BED_LEVEL_VISUALIZER))
+// With PAD_Z_HOMING the automatic Z-offset routine is not offered, so its row is left out
+#define LEVEL_CASE_AUTO_OFFSET DISABLED(PAD_Z_HOMING)
+#define LEVEL_CASE_START (LEVEL_CASE_AUTO_OFFSET + 1)
+#define LEVEL_CASE_EDIT (LEVEL_CASE_START + 1)
+#define LEVEL_CASE_BEDVIS (LEVEL_CASE_EDIT + 1)
+#define LEVEL_CASE_TOTAL (LEVEL_CASE_EDIT + ENABLED(BED_LEVEL_VISUALIZER))
 
 #define TUNE_CASE_SPEED 1
 #define TUNE_CASE_TEMP (TUNE_CASE_SPEED + ENABLED(HAS_HOTEND))
@@ -1760,7 +1783,7 @@ void Item_Prepare_Offset(const uint8_t row)
 #elif ENABLED(DWIN_CREALITY_320_LCD)
     DWIN_ICON_Show(HMI_flag.language, LANGUAGE_Zoffset, 42, MBASE(row) + JPN_OFFSET);
 #endif
-    DWIN_Draw_Signed_Float(font8x16, Color_Bg_Black, 2, 2, VALUERANGE_X - 14, MBASE(row), probe.offset.z * 100);
+    DWIN_Draw_Signed_Float(font8x16, Color_Bg_Black, 2, 2, VALUERANGE_X - 14, MBASE(row), BABY_Z_VAR * 100);
 #else
     DWIN_Frame_AreaCopy(1, 43, 89, 98, 101, LBLX, MBASE(row));
 #endif
@@ -1769,11 +1792,11 @@ void Item_Prepare_Offset(const uint8_t row)
   {
 #if HAS_BED_PROBE
 #ifdef USE_STRING_TITLES
-    DWIN_Draw_Label(MBASE(row), GET_TEXT_F(MSG_ZPROBE_ZOFFSET));
+    DWIN_Draw_Label(MBASE(row), GET_TEXT_F(TERN(PAD_Z_HOMING, MSG_HOME_OFFSET_Z, MSG_ZPROBE_ZOFFSET)));
 #else
     DWIN_Frame_AreaCopy(1, 93, 179, 141, 189, LBLX, MBASE(row)); // "with offset"
 #endif
-    DWIN_Draw_Signed_Float(font8x16, Color_Bg_Black, 2, 2, VALUERANGE_X - 14, MBASE(row), probe.offset.z * 100);
+    DWIN_Draw_Signed_Float(font8x16, Color_Bg_Black, 2, 2, VALUERANGE_X - 14, MBASE(row), BABY_Z_VAR * 100);
 #else
 #ifdef USE_STRING_TITLES
     DWIN_Draw_Label(MBASE(row), GET_TEXT_F(MSG_SET_HOME_OFFSETS));
@@ -4099,11 +4122,14 @@ void HMI_Zoffset()
     }
     if (Apply_Encoder(encoder_diffState, HMI_ValueStruct.offset_value))
     {
-      LIMIT(HMI_ValueStruct.offset_value, (PROBE_OFFSET_ZMIN) * 100, (PROBE_OFFSET_ZMAX) * 100);
+      LIMIT(HMI_ValueStruct.offset_value, (LCD_ZOFF_MIN) * 100, (LCD_ZOFF_MAX) * 100);
       last_zoffset = dwin_zoffset;
       dwin_zoffset = HMI_ValueStruct.offset_value / 100.0f; // Rock 20210726
       EncoderRate.enabled = false;
-#if HAS_BED_PROBE
+#if ENABLED(PAD_Z_HOMING)
+      motion.set_home_offset(Z_AXIS, -dwin_zoffset);   // M206 Z: applied by the next G28 (babystepped live meanwhile)
+      TERN_(EEPROM_SETTINGS, settings.save());
+#elif HAS_BED_PROBE
       probe.offset.z = dwin_zoffset;
       // millis_t start = millis();
       TERN_(EEPROM_SETTINGS, settings.save());
@@ -4125,10 +4151,10 @@ void HMI_Zoffset()
       DWIN_UpdateLCD();
       return;
     }
-    LIMIT(HMI_ValueStruct.offset_value, (PROBE_OFFSET_ZMIN) * 100, (PROBE_OFFSET_ZMAX) * 100);
+    LIMIT(HMI_ValueStruct.offset_value, (LCD_ZOFF_MIN) * 100, (LCD_ZOFF_MAX) * 100);
     last_zoffset = dwin_zoffset;
     dwin_zoffset = HMI_ValueStruct.offset_value / 100.0f;
-#if ANY(BABYSTEP_ZPROBE_OFFSET, JUST_BABYSTEP)
+#if ANY(BABYSTEP_ZPROBE_OFFSET, JUST_BABYSTEP, PAD_Z_HOMING)
     // if (BABYSTEP_ALLOWED()) babystep.add_mm(Z_AXIS, dwin_zoffset -last_zoffset);   //rock_20220214
     // serialprintPGM("d:babystep\n");
     babystep.add_mm(Z_AXIS, dwin_zoffset - last_zoffset);
@@ -6001,21 +6027,22 @@ void Draw_Level_Menu(){
   // Title
   Draw_Title(F("Leveling Menu"));
   
-  // There's no graphical asset for this label, so we just write it as string
-  DWIN_Draw_Label(MBASE(1), F("Start Auto Z-Offset"));
-  // Menu Line with Extrusion Icon
-  Draw_Menu_Line(1, ICON_SetHome);
-  
+  #if LEVEL_CASE_AUTO_OFFSET
+    // There's no graphical asset for this label, so we just write it as string
+    DWIN_Draw_Label(MBASE(LEVEL_CASE_AUTO_OFFSET), F("Start Auto Z-Offset"));
+    // Menu Line with Extrusion Icon
+    Draw_Menu_Line(LEVEL_CASE_AUTO_OFFSET, ICON_SetHome);
+  #endif
 
   // There's no graphical asset for this label, so we just write it as string
-  DWIN_Draw_Label(MBASE(2), F("Start Bed Leveling"));
+  DWIN_Draw_Label(MBASE(LEVEL_CASE_START), F("Start Bed Leveling"));
   // Menu Line with Extrusion Icon
-  Draw_Menu_Line(2, ICON_Edit_Level_Data); 
+  Draw_Menu_Line(LEVEL_CASE_START, ICON_Edit_Level_Data);
 
   // Show Edit Level Data Icon
-  DWIN_ICON_Show(HMI_flag.language, LANGUAGE_EDIT_LEVEL_DATA, 42, MBASE(3) + JPN_OFFSET);
+  DWIN_ICON_Show(HMI_flag.language, LANGUAGE_EDIT_LEVEL_DATA, 42, MBASE(LEVEL_CASE_EDIT) + JPN_OFFSET);
   // Draw Menu Line for Edit Level Data Icon
-  Draw_Menu_Line(3, ICON_Edit_Level_Data);
+  Draw_Menu_Line(LEVEL_CASE_EDIT, ICON_Edit_Level_Data);
 #if ENABLED(BED_LEVEL_VISUALIZER)
   Item_Level_BedVisualizer(LEVEL_CASE_BEDVIS);
 #endif
@@ -6048,17 +6075,19 @@ void HMI_Level_Menu(){
         select_cextr.reset();
         Goto_MainMenu();
         break;
-      case 1: // Start Auto Z-Offset
-        Popup_Window_Home();
-        gcode.process_subcommands_now(F("M8015 S0"));
-        break;
-      case 2: // Start Bed Leveling
+      #if LEVEL_CASE_AUTO_OFFSET
+        case LEVEL_CASE_AUTO_OFFSET: // Start Auto Z-Offset
+          Popup_Window_Home();
+          gcode.process_subcommands_now(F("M8015 S0"));
+          break;
+      #endif
+      case LEVEL_CASE_START: // Start Bed Leveling
         Popup_Window_Home();
         RUN_AND_WAIT_GCODE_CMD("G28", true); // Home all axes
         HMI_flag.leveling_offset_flag = false; //Disable Offset Flag
         HMI_flag.Pressure_Height_end = true; // Enable Leveling Flag
         break;
-      case 3: // Edit Level Data
+      case LEVEL_CASE_EDIT: // Edit Level Data
         checkkey = Leveling;
         HMI_flag.G29_finish_flag = true;
         HMI_flag.Edit_Only_flag = true;
@@ -7063,6 +7092,14 @@ void HMI_Confirm()
     return;
   if (encoder_diffState == ENCODER_DIFF_ENTER)
   {
+    #if ENABLED(PAD_Z_HOMING)
+      // Not reachable (the wizard is skipped); never start the automatic Z-offset from here
+      HMI_flag.boot_step = Boot_Step_Max;
+      HMI_flag.Need_boot_flag = false;
+      select_page.set(0);
+      Goto_MainMenu();
+      return;
+    #endif
     if (Set_language == HMI_flag.boot_step)
     {
 
@@ -10363,6 +10400,7 @@ void HMI_ThumbPrint()
       select_tune.reset();
       HMI_flag.Refresh_bottom_flag = false; // Flag refresh bottom parameter
       index_tune = MROWS;
+      thumb_index_tune = ThumbMROWS; // select_tune was reset: reset the scroll window too
       Draw_ThumbTune_Menu();
       break;
     case 1: // Press Pause
@@ -10584,6 +10622,14 @@ void HMI_Tune()
       HMI_ValueStruct.E_Temp = thermalManager.degTargetHotend(0);
       LIMIT(HMI_ValueStruct.E_Temp, HEATER_0_MINTEMP, thermalManager.hotend_max_target(0));
       DWIN_Draw_IntValue(true, true, 0, font8x16, Color_White, Select_Color, 3, VALUERANGE_X, MBASE(TUNE_CASE_TEMP + MROWS - index_tune) + PRINT_SET_OFFSET, HMI_ValueStruct.E_Temp);
+      EncoderRate.enabled = true;
+      break;
+
+    case TUNE_CASE_FLOW: // Flow rate (was drawn but had no handler in the non-thumbnail Tune menu)
+      checkkey = EFlow;
+      HMI_ValueStruct.E_Flow = planner.flow_percentage[0];
+      LIMIT(HMI_ValueStruct.E_Flow, FLOW_MINVAL, FLOW_MAXVAL);
+      DWIN_Draw_IntValue(true, true, 0, font8x16, Color_White, Select_Color, 3, VALUERANGE_X, MBASE(TUNE_CASE_FLOW + MROWS - index_tune) + PRINT_SET_OFFSET, HMI_ValueStruct.E_Flow);
       EncoderRate.enabled = true;
       break;
 
@@ -12624,6 +12670,9 @@ void DWIN_HandleScreen()
   case Tune:
     HMI_Tune();
     break;
+  case EFlow:
+    HMI_EFlow();
+    break;
 #if HAS_PREHEAT
   case PLAPreheat:
     HMI_PLAPreheatSetting();
@@ -13344,7 +13393,7 @@ void DWIN_Show_M117(char *str)
 void DWIN_CompletedHoming()
 {
   HMI_flag.home_flag = false;
-  dwin_zoffset = TERN0(HAS_BED_PROBE, probe.offset.z);
+  dwin_zoffset = TERN(PAD_Z_HOMING, BABY_Z_VAR, TERN0(HAS_BED_PROBE, probe.offset.z));
   // Print log("checkkey:",checkkey);
   if (checkkey == Last_Prepare)
   {
@@ -13386,7 +13435,7 @@ void DWIN_CompletedHeight()
 {
   HMI_flag.home_flag = false;
   checkkey = Prepare;
-  dwin_zoffset = TERN0(HAS_BED_PROBE, probe.offset.z);
+  dwin_zoffset = TERN(PAD_Z_HOMING, BABY_Z_VAR, TERN0(HAS_BED_PROBE, probe.offset.z));
   Draw_Prepare_Menu();
   DWIN_UpdateLCD();
 }

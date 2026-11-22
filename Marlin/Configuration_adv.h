@@ -1213,7 +1213,7 @@
   #define FTM_SHAPING_ZETA_E            0.03f   // Zeta used by input shapers for E axis
   #define FTM_SHAPING_V_TOL_E           0.05f   // Vibration tolerance used by EI input shapers for E axis
 
-  //#define FTM_SMOOTHING                       // Smoothing can reduce artifacts and make steppers quieter
+  #define FTM_SMOOTHING                       // Smoothing can reduce artifacts and make steppers quieter
                                                 // on sharp corners, but too much will round corners.
   #if ENABLED(FTM_SMOOTHING)
     #define FTM_MAX_SMOOTHING_TIME      0.10f   // (s) Maximum smoothing time. Higher values consume more RAM.
@@ -2500,6 +2500,48 @@
   #define BETWEEN_Z       6                            // Safe distance from brush or automatic Z offset to tool sensing area
   #define AUTOTOOL_RESULT                           // debug CRTouch probe info
   #define AUTOTOOL_PRINT
+#endif
+
+#if ENABLED(PAD_Z_HOMING)
+  // Pad Z homing thresholds, in raw HX711 counts relative to the unloaded reading.
+  // 'M8015 T' prints live readings (no motion) to check them against your sensor.
+  // Noise = idle min..max after removing slow drift and the 2 highest and 2 lowest samples.
+  #define PAD_NOISE_MAX       1500 // Max idle noise; more = homing fails (before descent, after back-off)
+  #define PAD_COARSE_TRIGGER 4000  // Contact threshold of the first descent
+  #define PAD_FINE_TRIGGER   3000  // Contact threshold of the slow measuring passes (>= 2 x PAD_NOISE_MAX)
+  // Touch at print temperature: targets already set (nozzle >= 50 °C, bed >= 30 °C, e.g. by the
+  // start G-code before G28) are used, otherwise these defaults. Both are waited for, then restored.
+  #define PAD_HOME_NOZZLE_TEMP 220 // (°C) Default nozzle temperature. 0 = touch cold, no heating at all.
+  #define PAD_HOME_BED_TEMP     50 // (°C) Default bed temperature. 0 = do not heat the bed.
+
+  // Wipe the nozzle before homing (EXPERIMENTAL, README "Pad Z homing"). With a nozzle hot enough to
+  // extrude, G28 homes Y then X, heats parked off the bed, retracts, touches roughly on the scrape
+  // strip (PAD_SCRAPE_X, PAD_SCRAPE_ROUGH_Y), wipes along the strip PAD_SCRAPE_PASSES times between
+  // PAD_SCRAPE_Y0 and PAD_SCRAPE_Y1 holding the load at PAD_SCRAPE_FORCE +- PAD_SCRAPE_BAND (live
+  // HX711 control of Z, never deeper than PAD_SCRAPE_DEPTH below the contact; over
+  // PAD_SCRAPE_FORCE_MAX: lift, wipe ended), flicks off the strip to PAD_SCRAPE_FLICK_X, lifts there,
+  // and homes precisely on the pad at once.
+  // M8016 runs the rough touch and the wipe alone. Loads in HX711 counts (~100 per gram).
+  //#define PAD_SCRAPE
+  #if ENABLED(PAD_SCRAPE)
+    #define HOME_Y_BEFORE_X              // Y first, then X: the nozzle ends next to the strip
+    #define PAD_SCRAPE_PARK_X    -11     // (mm) Wait for heat here, off the bed (ooze drips outside)
+    #define PAD_SCRAPE_PARK_Y     10
+    #define PAD_SCRAPE_X          -5     // (mm) Strip X: left of the sheet, on the bed plate
+    #define PAD_SCRAPE_ROUGH_Y    10     // (mm) Rough touch Y
+    #define PAD_SCRAPE_Y0         50     // (mm) Wipe start
+    #define PAD_SCRAPE_Y1         20     // (mm) Wipe turning point: Y0->Y1, Y1->Y0, ...
+    #define PAD_SCRAPE_PASSES      4     // Wipe passes
+    #define PAD_SCRAPE_SPEED      25     // (mm/s) Wipe speed (the load is read every HX711 sample, ~12.5 ms)
+    #define PAD_SCRAPE_DEPTH       0.2   // (mm) Deepest wipe height below the rough contact (max 0.4)
+    #define PAD_SCRAPE_FORCE   15000     // Load held while wiping (~150 g) ...
+    #define PAD_SCRAPE_BAND     5000     // ... +- this: over it Z goes up, under it back down to the depth
+    #define PAD_SCRAPE_FORCE_MAX 35000   // Hard load limit (~350 g): lift at once, wipe ended
+    #define PAD_SCRAPE_FLICK_X   -11     // (mm) Flick off the strip edge to here at the end, then lift (comment out: no flick)
+    #define PAD_SCRAPE_TRIGGER 10000     // Contact threshold of the rough touch on the strip (~100 g: pushes through ooze)
+    #define PAD_SCRAPE_RETRACT     2     // (mm) Filament pulled back before the first touch (logical E unchanged)
+    #define PAD_SCRAPE_OOZE_WAIT  20     // (s) After heating, wait parked off the bed so the nozzle oozes out there (0 = off)
+  #endif
 #endif
 
 // @section extruder

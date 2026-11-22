@@ -18,6 +18,11 @@
   128 active serialization calls. check_eeprom_upgrade.py reproduces the ARM
   comparison using compile_commands.json and pyelftools. Wizard and PLR-menu
   raw EEPROM regions are unchanged. See docs/upstream-integration-2026-11.md.
+- PAD_Z_HOMING (off by default, never run on hardware): G28 homes Z by nozzle
+  touch on the HX711 pad via e3v3se/PadHoming.*, direct Z stepping, kill() on any
+  failure. BLTouch stays configured for explicit G29 only: the auto Z-offset
+  (M8015, Leveling menu row), first-boot wizard and USER_LEVEL_CHECK are compiled
+  out with the option, since that routine assumes probe-homed Z. No EEPROM change.
 
 This is a point-in-time reference for future work, not a substitute for checking the active branch and current source. Branch refs, hardware configurations, and experiments may change. Facts below were inspected on **2026-10-09** in the working tree at `for_E3V3SE`, commit `4d0510d947` (also `origin/for_E3V3SE`).
 

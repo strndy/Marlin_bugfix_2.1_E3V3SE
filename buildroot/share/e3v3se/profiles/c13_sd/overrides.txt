@@ -72,7 +72,7 @@ Configuration.h D V_MAX_ENDSTOP_HIT_STATE
 Configuration.h D W_MIN_ENDSTOP_HIT_STATE
 Configuration.h D W_MAX_ENDSTOP_HIT_STATE
 Configuration.h E ENDSTOP_INTERRUPTS_FEATURE
-Configuration.h E DEFAULT_AXIS_STEPS_PER_UNIT { 80, 80, 400, 715.12 }
+Configuration.h E DEFAULT_AXIS_STEPS_PER_UNIT { 80, 80, 400, 847.5 }
 Configuration.h E DEFAULT_MAX_FEEDRATE { 500, 500, 20, 30 }
 Configuration.h E LIMITED_MAX_FR_EDITING
 Configuration.h E MAX_FEEDRATE_EDIT_VALUES { 1000, 1000, 40, 60 }
@@ -160,6 +160,7 @@ Configuration_adv.h E FT_MOTION
 Configuration_adv.h E FTM_IS_DEFAULT_MOTION
 Configuration_adv.h E FTM_DEFAULT_SHAPER_Y ftMotionShaper_3HEI
 Configuration_adv.h E FTM_SHAPING_DEFAULT_FREQ_Y 42.0f
+Configuration_adv.h E FTM_SMOOTHING
 Configuration_adv.h E SHAPING_FREQ_X 42.0
 Configuration_adv.h E DEFAULT_STEPPER_TIMEOUT_SEC 1200
 Configuration_adv.h E DISABLE_IDLE_X false

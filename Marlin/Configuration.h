@@ -153,6 +153,11 @@
 // |  *          *  |
 #define D_ROUTINE_AUTO_OFFSET  // Enable this to calculate the Z offset automatically using the 4 points of the bed, (Delta) pattern
 
+// Home Z by touching the nozzle on the bed strain-gauge pad (HX711) instead of the CR Touch,
+// so the probe can be unplugged for printing. The probe stays configured for G29.
+// EXPERIMENTAL: read README "Pad Z homing" before the first G28. Thresholds: PAD_* in Configuration_adv.h.
+//#define PAD_Z_HOMING
+
 
 #define USE_SWITCH_POWER_200W  0 //Default 1: Using a 200W power supply, the nozzle and heating bed cannot be heated at the same time. 0: The >200w power supply used has sufficient power and can be heated at the same time.
 // #define CREALITY_LEVEL_COMPENSATION_ALGORITHM   1 //1 Use algorithm 0 Algorithm not applicable
@@ -177,6 +182,9 @@
 // #define K8_EXTRUDER             0 //1 is K8 extruder 0 is Elf extruder
 #define USER_LEVEL_CHECK        1 //Leveling calibration enable
 #define WUHAN_CHENGE_PLATFORM   1 //Wuhan changed platform board 20230913_Rock
+#if ENABLED(PAD_Z_HOMING)
+  #undef USER_LEVEL_CHECK         // Never probe at print start: the CR Touch may be unplugged
+#endif
 
 // @section stepper drivers
 
@@ -1417,7 +1425,7 @@
  * Override with M92 (when enabled below)
  *                                      X, Y, Z [, I [, J [, K...]]], E0 [, E1[, E2...]]
  */
-#define DEFAULT_AXIS_STEPS_PER_UNIT   { 80, 80, 400, 715.12 }
+#define DEFAULT_AXIS_STEPS_PER_UNIT   { 80, 80, 400, 847.5 }
 
 /**
  * Enable support for M92. Disable to save at least ~530 bytes of flash.

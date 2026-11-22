@@ -193,7 +193,7 @@
  
  #if defined(DISPLAY_SLEEP_MINUTES) || defined(LCD_BACKLIGHT_TIMEOUT_MINS)
    #define EDITABLE_DISPLAY_TIMEOUT      // Edit sleep / backlight timeout with M255 S<minutes> and a menu item
-@@ -2464,6 +2479,28 @@
+@@ -2464,6 +2479,70 @@
    #endif
  #endif
  
@@ -219,10 +219,52 @@
 +  #define AUTOTOOL_PRINT
 +#endif
 +
++#if ENABLED(PAD_Z_HOMING)
++  // Pad Z homing thresholds, in raw HX711 counts relative to the unloaded reading.
++  // 'M8015 T' prints live readings (no motion) to check them against your sensor.
++  // Noise = idle min..max after removing slow drift and the 2 highest and 2 lowest samples.
++  #define PAD_NOISE_MAX       1500 // Max idle noise; more = homing fails (before descent, after back-off)
++  #define PAD_COARSE_TRIGGER 4000  // Contact threshold of the first descent
++  #define PAD_FINE_TRIGGER   3000  // Contact threshold of the slow measuring passes (>= 2 x PAD_NOISE_MAX)
++  // Touch at print temperature: targets already set (nozzle >= 50 °C, bed >= 30 °C, e.g. by the
++  // start G-code before G28) are used, otherwise these defaults. Both are waited for, then restored.
++  #define PAD_HOME_NOZZLE_TEMP 220 // (°C) Default nozzle temperature. 0 = touch cold, no heating at all.
++  #define PAD_HOME_BED_TEMP     50 // (°C) Default bed temperature. 0 = do not heat the bed.
++
++  // Wipe the nozzle before homing (EXPERIMENTAL, README "Pad Z homing"). With a nozzle hot enough to
++  // extrude, G28 homes Y then X, heats parked off the bed, retracts, touches roughly on the scrape
++  // strip (PAD_SCRAPE_X, PAD_SCRAPE_ROUGH_Y), wipes along the strip PAD_SCRAPE_PASSES times between
++  // PAD_SCRAPE_Y0 and PAD_SCRAPE_Y1 holding the load at PAD_SCRAPE_FORCE +- PAD_SCRAPE_BAND (live
++  // HX711 control of Z, never deeper than PAD_SCRAPE_DEPTH below the contact; over
++  // PAD_SCRAPE_FORCE_MAX: lift, wipe ended), flicks off the strip to PAD_SCRAPE_FLICK_X, lifts there,
++  // and homes precisely on the pad at once.
++  // M8016 runs the rough touch and the wipe alone. Loads in HX711 counts (~100 per gram).
++  //#define PAD_SCRAPE
++  #if ENABLED(PAD_SCRAPE)
++    #define HOME_Y_BEFORE_X              // Y first, then X: the nozzle ends next to the strip
++    #define PAD_SCRAPE_PARK_X    -11     // (mm) Wait for heat here, off the bed (ooze drips outside)
++    #define PAD_SCRAPE_PARK_Y     10
++    #define PAD_SCRAPE_X          -5     // (mm) Strip X: left of the sheet, on the bed plate
++    #define PAD_SCRAPE_ROUGH_Y    10     // (mm) Rough touch Y
++    #define PAD_SCRAPE_Y0         50     // (mm) Wipe start
++    #define PAD_SCRAPE_Y1         20     // (mm) Wipe turning point: Y0->Y1, Y1->Y0, ...
++    #define PAD_SCRAPE_PASSES      4     // Wipe passes
++    #define PAD_SCRAPE_SPEED      25     // (mm/s) Wipe speed (the load is read every HX711 sample, ~12.5 ms)
++    #define PAD_SCRAPE_DEPTH       0.2   // (mm) Deepest wipe height below the rough contact (max 0.4)
++    #define PAD_SCRAPE_FORCE   15000     // Load held while wiping (~150 g) ...
++    #define PAD_SCRAPE_BAND     5000     // ... +- this: over it Z goes up, under it back down to the depth
++    #define PAD_SCRAPE_FORCE_MAX 35000   // Hard load limit (~350 g): lift at once, wipe ended
++    #define PAD_SCRAPE_FLICK_X   -11     // (mm) Flick off the strip edge to here at the end, then lift (comment out: no flick)
++    #define PAD_SCRAPE_TRIGGER 10000     // Contact threshold of the rough touch on the strip (~100 g: pushes through ooze)
++    #define PAD_SCRAPE_RETRACT     2     // (mm) Filament pulled back before the first touch (logical E unchanged)
++    #define PAD_SCRAPE_OOZE_WAIT  20     // (s) After heating, wait parked off the bed so the nozzle oozes out there (0 = off)
++  #endif
++#endif
++
  // @section extruder
  
  /**
-@@ -2578,7 +2615,11 @@
+@@ -2578,7 +2657,11 @@
    #define PROBING_MARGIN_LEFT PROBING_MARGIN
    #define PROBING_MARGIN_RIGHT PROBING_MARGIN+10
    #define PROBING_MARGIN_FRONT PROBING_MARGIN
@@ -234,7 +276,7 @@
  #endif
  
  #if ANY(MESH_BED_LEVELING, AUTO_BED_LEVELING_UBL)
-@@ -3463,6 +3504,10 @@
+@@ -3463,6 +3546,10 @@
    #define  X_SLAVE_ADDRESS 0x03
    #define  Y_SLAVE_ADDRESS 0x03
    #define  Z_SLAVE_ADDRESS 0x03
@@ -245,7 +287,7 @@
    //#define X2_SLAVE_ADDRESS 0
    //#define Y2_SLAVE_ADDRESS 0
    //#define Z2_SLAVE_ADDRESS 0
-@@ -3474,7 +3519,7 @@
+@@ -3474,7 +3561,7 @@
    //#define  U_SLAVE_ADDRESS 0
    //#define  V_SLAVE_ADDRESS 0
    //#define  W_SLAVE_ADDRESS 0
@@ -254,7 +296,7 @@
    //#define E1_SLAVE_ADDRESS 0
    //#define E2_SLAVE_ADDRESS 0
    //#define E3_SLAVE_ADDRESS 0
-@@ -4265,9 +4310,7 @@
+@@ -4265,9 +4352,7 @@
  #if ENABLED(GCODE_MACROS)
    #define GCODE_MACROS_SLOTS       5  // Up to 10 may be used
    #define GCODE_MACROS_SLOT_SIZE  50  // Maximum length of a single macro
@@ -264,7 +306,7 @@
  #endif
  
  /**
-@@ -4562,9 +4605,7 @@
+@@ -4562,9 +4647,7 @@
  #if ENABLED(FREEZE_FEATURE)
    //#define FREEZE_PIN   -1   // Override the default (KILL) pin here
    #define FREEZE_STATE  LOW   // State of pin indicating freeze
@@ -274,7 +316,7 @@
    /**
     * Command P000 (REALTIME_REPORTING_COMMANDS and EMERGENCY_PARSER) or
     * FREEZE_PIN (FREEZE_FEATURE) initiates a soft feed hold that keeps
-@@ -4577,9 +4618,7 @@
+@@ -4577,9 +4660,7 @@
     * NOTE: Affects Laser PWM but DOES NOT pause Spindle, Fans, Heaters or other devices.
     */
    //#define SOFT_FEED_HOLD
