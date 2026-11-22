@@ -2540,6 +2540,7 @@
     #define PAD_SCRAPE_FLICK_X   -11     // (mm) Flick off the strip edge to here at the end, then lift (comment out: no flick)
     #define PAD_SCRAPE_TRIGGER 10000     // Contact threshold of the rough touch on the strip (~100 g: pushes through ooze)
     #define PAD_SCRAPE_RETRACT     2     // (mm) Filament pulled back before the first touch (logical E unchanged)
+    #define PAD_SCRAPE_OOZE_WAIT  20     // (s) After heating, wait parked off the bed so the nozzle oozes out there (0 = off)
   #endif
 #endif
 

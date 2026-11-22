@@ -252,6 +252,19 @@ static FSTR_P pad_read(int32_t &val) {
   }
   marlin.heatup_done();                                // left set, it would silence M155 reports
 
+  #if ENABLED(PAD_SCRAPE) && PAD_SCRAPE_OOZE_WAIT > 0
+    // A freshly heated nozzle keeps oozing for a while: let it drip off the bed (parked at
+    // PAD_SCRAPE_PARK_X) before the retract, the rough touch and the wipe.
+    if (pad_scrape_enabled && !thermalManager.tooColdToExtrude(0)) {
+      SERIAL_ECHOLNPGM("PAD_SCRAPE: letting the nozzle ooze off the bed for ", PAD_SCRAPE_OOZE_WAIT, " s");
+      ui.set_status(F("Pad Z homing: oozing off"));
+      for (const millis_t end = millis() + SEC_TO_MS(PAD_SCRAPE_OOZE_WAIT); PENDING(millis(), end);) {
+        marlin.idle(true);
+        if (TERN0(HAS_MEDIA, card.flag.abort_sd_printing) || !marlin.isRunning()) return pad_fail(F("cancelled while oozing"));
+      }
+    }
+  #endif
+
   if (!thermalManager.tooColdToExtrude(0)) {
     // Pull the melt back a little; logical E unchanged, the print's prime line makes it up
     const float e_before = motion.position.e;
