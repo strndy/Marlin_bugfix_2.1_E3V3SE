@@ -334,9 +334,15 @@ static void pad_sort(int32_t * const v, const uint8_t n) {
 }
 
 // Baseline over N samples (after dropping the pending one). Fails on a bad or noisy sensor.
+// Taken only with the nozzle in the air, so a load means something else is touching the bed (a
+// hand cleaning the strip, a bump): wait for it to go away (BASELINE_TRIES x BASELINE_WAIT_MS)
+// before failing.
+constexpr uint8_t BASELINE_TRIES = 6;
+constexpr millis_t BASELINE_WAIT_MS = 2000;
 template<uint8_t N>
 [[nodiscard]] static bool pad_baseline(FSTR_P const noisy_msg, PadStats &st) {
   static_assert(N >= 4 * NOISE_TRIM + 4 && N <= 32, "pad_baseline: bad window size");
+  for (uint8_t attempt = 1;; ++attempt) {
   int32_t v[N], vmin = INT32_MAX, vmax = INT32_MIN;
   int64_t sum = 0;
   if (!pad_sample(0, v[0])) return false;              // converted before the window started
@@ -360,9 +366,17 @@ template<uint8_t N>
   st = { v[N - 1 - NOISE_TRIM] - v[NOISE_TRIM], vmax - vmin, avg };
   if (st.noise > PAD_NOISE_MAX || pad_abs(drift) > PAD_NOISE_MAX) {
     SERIAL_ECHOLNPGM("PAD_HOME: noise=", st.noise, " drift=", drift, " limit=", PAD_NOISE_MAX, " (raw spread=", st.raw, ")");
-    return pad_fail(noisy_msg);
+    if (attempt >= BASELINE_TRIES) return pad_fail(noisy_msg);
+    SERIAL_ECHOLNPGM("PAD_HOME: bed disturbed? waiting (", attempt, "/", BASELINE_TRIES - 1, ")");
+    for (const millis_t end = millis() + BASELINE_WAIT_MS; PENDING(millis(), end);) {
+      marlin.idle_no_sleep();
+      if (TERN0(HAS_MEDIA, card.flag.abort_sd_printing) || !marlin.isRunning()) return pad_fail(F("interrupted"));
+    }
+    pad_reader_reset();
+    continue;
   }
   return true;
+  }
 }
 
 /**
