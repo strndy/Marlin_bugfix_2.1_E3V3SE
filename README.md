@@ -224,12 +224,14 @@ What `G28` does with the option on: heating starts together with the X/Y homing,
 
 ### Hardware: fan shroud and probe mount
 
-Pad Z homing is meant for printing without the CR Touch hanging next to the nozzle (it limits the tilt of non-planar toolpaths). A matching part-cooling fan shroud with a relocated probe mount is designed for this setup:
+With pad Z homing the CR Touch is **only needed for bed leveling** (`G29` / LCD leveling). Homing, the nozzle wipe and printing work without it, so it can stay off for printing (it otherwise hangs next to the nozzle and limits the tilt of non-planar toolpaths). Clip it on, level, take it off.
+
+A matching part-cooling fan shroud with a relocated probe mount is designed for this setup:
 
 - **CAD (Onshape):** [Ender-3 V3 SE fan shroud + probe mount](https://cad.onshape.com/documents/c24d2ffa06007b6722483159/w/6306d1cafc16823eff7ef349/e/125d47a761374161794c4edb)
 - **STL:** `hardware/fan-shroud/` (to be added)
-- **Probe offset with this mount:** the probe moves to the right of the nozzle (roughly X +37 mm, Y ~0 from the CAD; exact values to be confirmed). Set it with `M851 X<x> Y<y>` and `M500` (the Z value of `M851` does not matter here: `G29` normalizes the mesh to the pad spot). With the probe right of the nozzle the leftmost ~25 mm of the bed cannot be probed; the mesh extrapolates there.
-- With the probe clipped on, check that its body sits higher than the nozzle tip before running the wipe (`PAD_SCRAPE`): the wipe moves the nozzle along the strip at X-5 with the probe over the bed. `M8016 E0` switches the wipe off while the probe is fitted.
+- **Probe offset with this mount:** the probe sits **18 mm (X) and 10 mm (Y) away from its original position** (stock offset `M851 X-24.25 Y-15`). Set the resulting offset with `M851 X<x> Y<y>` and `M500`; the Z value of `M851` does not matter (`G29` normalizes the mesh to the pad spot). To get X/Y exactly on your printer: put a dot on paper on the bed, move the nozzle over it and note X/Y, deploy the pin (`M401`), move the pin over the same dot and note X/Y; the difference is the offset.
+- With the probe clipped on, check that its body sits higher than the nozzle tip before running the wipe (`PAD_SCRAPE`), or switch the wipe off with `M8016 E0` while the probe is fitted.
 
 ### First test
 
