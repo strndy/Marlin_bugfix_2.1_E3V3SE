@@ -59,7 +59,7 @@ constexpr float Z_SPEED_MM_S      = 4,     // direct stepping speed, no accelera
                 FINE_STEP_MM      = 0.02f, // fine pass step
                 BACKOFF_MM        = 1.0f,  // lift after the coarse contact; fine passes start here
                 FINE_WINDOW_MM    = 0.5f,  // fine contact must be within this of the coarse contact
-                MAX_SPREAD_MM     = 0.10f, // fine passes must agree within this
+                MAX_SPREAD_MM     = 0.03f, // fine passes must agree within this (clean: <=0.007, dirty tip: 0.045..0.07)
                 KNOWN_Z_MARGIN_MM = 5,     // Z known: no contact this far below the expected point = fail
                 FAIL_LIFT_MM      = 2;     // max lift after a failure
 constexpr uint8_t FINE_PASSES     = 3;     // odd: the median is used
@@ -902,7 +902,26 @@ bool pad_home_z() {
                 restore_bed = had_preheat ? saved_bed : TERN0(HAS_HEATED_BED, thermalManager.degTargetBed());
   saved_nozzle = -1;
 
-  if (pad_home_run(restore_nozzle, restore_bed)) {
+  bool ok = pad_home_run(restore_nozzle, restore_bed);
+  #if ENABLED(PAD_SCRAPE)
+    // Dirty tip after the wipe (fine passes disagree etc.): lift, forget Z, and run the whole
+    // sequence once more (rough touch, wipe, precise touch) before giving up.
+    if (!ok && pad_scraped && pad_err_dirty && !pad_err_stopped) {
+      SERIAL_ECHOLN(F("PAD_HOME: nozzle still dirty ("), pad_err, F("), wiping again"));
+      planner.quick_stop();
+      pad_step_z(_MIN(pad_err_down, pad_steps(FAIL_LIFT_MM)), true);
+      motion.quickstop_stepper();
+      motion.set_axis_untrusted(Z_AXIS);
+      motion.set_axis_unhomed(Z_AXIS);
+      motion.position.z = 0;
+      motion.sync_plan_position();
+      pad_err = nullptr;
+      pad_err_down = 0;
+      pad_scraped = pad_err_dirty = false;
+      ok = pad_home_run(restore_nozzle, restore_bed);
+    }
+  #endif
+  if (ok) {
     ui.reset_status();
     return true;
   }

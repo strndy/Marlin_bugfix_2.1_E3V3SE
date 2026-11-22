@@ -2538,7 +2538,7 @@
     #define PAD_SCRAPE_BAND     5000     // ... +- this: over it Z goes up, under it back down to the depth
     #define PAD_SCRAPE_FORCE_MAX 35000   // Hard load limit (~350 g): lift at once, wipe ended
     #define PAD_SCRAPE_FLICK_X   -11     // (mm) Flick off the strip edge to here at the end, then lift (comment out: no flick)
-    #define PAD_SCRAPE_TRIGGER  2500     // Contact threshold of the rough touch on the strip
+    #define PAD_SCRAPE_TRIGGER 10000     // Contact threshold of the rough touch on the strip (~100 g: pushes through ooze)
     #define PAD_SCRAPE_RETRACT     2     // (mm) Filament pulled back before the first touch (logical E unchanged)
   #endif
 #endif
