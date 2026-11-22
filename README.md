@@ -230,6 +230,8 @@ A matching part-cooling fan shroud with a relocated probe mount is designed for 
 
 - **CAD (Onshape):** [Ender-3 V3 SE fan shroud + probe mount](https://cad.onshape.com/documents/c24d2ffa06007b6722483159/w/6306d1cafc16823eff7ef349/e/125d47a761374161794c4edb)
 - **STL:** `hardware/fan-shroud/` (to be added)
+- **Fans:** the shroud takes **4x 5015 blower fans** (part cooling). Check that your board's fan output can drive all four (wire them in parallel; 24 V fans on the stock 24 V fan header).
+- **Non-planar clearance:** the shroud is designed around a 39° clearance cone; measured from the nozzle tip centre the lowest edge of the shroud is at **36° all around** (r 15 mm, 11 mm above the tip). Keep non-planar slopes at or below ~32-33° for margin (the stock CR Touch mount allowed about 5.5°). The gantry wheels sit ~48 mm above the tip at 80-100 mm from the nozzle.
 - **Probe offset with this mount:** the probe moves 18 mm further out in X and 10 mm closer to the nozzle in Y than the stock mount (`M851 X-24.25 Y-15`): **`M851 X-42.24 Y-5`** (from CAD; check it with the dot test below), then `M500`. With the probe 42 mm left of the nozzle the rightmost ~40 mm of the bed cannot be probed; the mesh extrapolates there. the Z value of `M851` does not matter (`G29` normalizes the mesh to the pad spot). To get X/Y exactly on your printer: put a dot on paper on the bed, move the nozzle over it and note X/Y, deploy the pin (`M401`), move the pin over the same dot and note X/Y; the difference is the offset.
 - With the probe clipped on, check that its body sits higher than the nozzle tip before running the wipe (`PAD_SCRAPE`), or switch the wipe off with `M8016 E0` while the probe is fitted.
 
