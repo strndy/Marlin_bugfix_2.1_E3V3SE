@@ -69,6 +69,7 @@
     // M8016: rough touch + wipe only (X/Y/Z homed). Never stops the machine; reports on serial.
     void pad_scrape_only(const PadScrapeParams &p);
     PadScrapeParams pad_scrape_defaults();
+    extern bool pad_scrape_enabled;   // runtime switch for the G28 wipe (M8016 E0/E1), not saved, on at boot
   #endif
 
 #endif

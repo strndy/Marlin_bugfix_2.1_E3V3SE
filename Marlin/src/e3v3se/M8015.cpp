@@ -93,10 +93,17 @@ void GcodeSuite::M8015()
  *   L<counts>        hard limit: lift at once, wipe ended
  *   F<mm/s>          wipe speed (1..50)
  *   K<mm>            flick to this X at the end (K = X: no flick)
+*   E0 / E1          switch the wipe in G28 off / on (e.g. while a probe is clipped on); nothing else runs
  *   Z<mm>            expected strip height relative to homed Z0 (default 0). Z10 tests in the air:
  *                    no contact down to Z9, so it stops with "no strip contact in range".
  */
 void GcodeSuite::M8016() {
+  // M8016 E0 / E1: switch the wipe in G28 off / on (e.g. while a probe is clipped on). Not saved.
+  if (parser.seenval('E')) {
+    pad_scrape_enabled = parser.value_bool();
+    SERIAL_ECHOLNPGM("PAD_SCRAPE: wipe in G28 ", pad_scrape_enabled ? "ON" : "OFF");
+    return;
+  }
   PadScrapeParams p = pad_scrape_defaults();
   if (parser.seenval('X')) p.x = parser.value_float();
   if (parser.seenval('R')) p.rough_y = parser.value_float();

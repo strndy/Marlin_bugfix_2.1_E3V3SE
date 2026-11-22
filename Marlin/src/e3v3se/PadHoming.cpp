@@ -98,6 +98,9 @@ static bool pad_fail(FSTR_P const why, const long down=0) {
 }
 
 #if ENABLED(PAD_SCRAPE)
+  bool pad_scrape_enabled = true;
+#endif
+#if ENABLED(PAD_SCRAPE)
   static bool pad_scraped,       // the nozzle was scraped in this homing
               pad_err_dirty;     // the failure is one a dirty nozzle tip causes
   // A failure of the precise measurement that plastic on the tip explains
@@ -710,7 +713,7 @@ template<uint8_t N>
     // Hot enough to extrude: the tip can carry a blob. Then the rough touch is on the scrape strip
     // (a squashed blob lands where it is scraped next) and the pad spot stays untouched until the
     // nozzle is clean.
-    const bool scrape = !thermalManager.tooColdToExtrude(0);
+    const bool scrape = pad_scrape_enabled && !thermalManager.tooColdToExtrude(0);
     const float first_x = scrape ? float(PAD_SCRAPE_X) : float(AUTOZ_TOOL_X),
                 first_y = scrape ? float(PAD_SCRAPE_ROUGH_Y) : float(AUTOZ_TOOL_Y);
   #endif
