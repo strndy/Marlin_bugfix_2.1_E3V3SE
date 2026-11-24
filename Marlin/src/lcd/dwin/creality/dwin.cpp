@@ -3966,6 +3966,11 @@ inline ENCODER_DiffState get_encoder_state()
   return state;
 }
 
+// Move menu entered without homing: free jog, no range limits, operator's responsibility.
+// Unhomed axes start at 0, so the numbers read as distance moved since entering.
+static bool jog_unhomed = false;
+#define JOG_LIMIT(V, LO, HI) do{ if (jog_unhomed) LIMIT(V, -999 * MINUNITMULT, 999 * MINUNITMULT); else LIMIT(V, LO, HI); }while(0)
+
 void HMI_Plan_Move(const feedRate_t fr_mm_s)
 {
   if (!planner.is_full())
@@ -4012,7 +4017,7 @@ void HMI_Move_X()
       DWIN_Draw_Signed_Float(font8x16, Color_Bg_Black, 3, UNITFDIGITS, VALUERANGE_X, MBASE(1), HMI_ValueStruct.Move_X_scaled);
       return HMI_Move_Done(X_AXIS);
     }
-    LIMIT(HMI_ValueStruct.Move_X_scaled, (XY_BED_MIN_ZERO)*MINUNITMULT, (X_BED_SIZE)*MINUNITMULT);
+    JOG_LIMIT(HMI_ValueStruct.Move_X_scaled, (XY_BED_MIN_ZERO)*MINUNITMULT, (X_BED_SIZE)*MINUNITMULT);
     motion.position.x = HMI_ValueStruct.Move_X_scaled / MINUNITMULT;
     DWIN_Draw_Signed_Float(font8x16, Select_Color, 3, UNITFDIGITS, VALUERANGE_X, MBASE(1), HMI_ValueStruct.Move_X_scaled);
     // delay(10); //Solve the problem that two values ​​​​are selected together during rapid rotation.
@@ -4031,7 +4036,7 @@ void HMI_Move_Y()
       DWIN_Draw_Signed_Float(font8x16, Color_Bg_Black, 3, UNITFDIGITS, VALUERANGE_X, MBASE(2), HMI_ValueStruct.Move_Y_scaled);
       return HMI_Move_Done(Y_AXIS);
     }
-    LIMIT(HMI_ValueStruct.Move_Y_scaled, (XY_BED_MIN_ZERO)*MINUNITMULT, (Y_BED_SIZE)*MINUNITMULT);
+    JOG_LIMIT(HMI_ValueStruct.Move_Y_scaled, (XY_BED_MIN_ZERO)*MINUNITMULT, (Y_BED_SIZE)*MINUNITMULT);
     motion.position.y = HMI_ValueStruct.Move_Y_scaled / MINUNITMULT;
     DWIN_Draw_Signed_Float(font8x16, Select_Color, 3, UNITFDIGITS, VALUERANGE_X, MBASE(2), HMI_ValueStruct.Move_Y_scaled);
     // delay(10); //Solve the problem that two values ​​​​are selected together during rapid rotation.
@@ -4052,7 +4057,7 @@ void HMI_Move_Z()
       return HMI_Move_Done(Z_AXIS);
     }
     // rock_20211025 Modified axis movement interface cannot move to negative values to prevent collisions
-    LIMIT(HMI_ValueStruct.Move_Z_scaled, (Z_MIN_POS)*MINUNITMULT, (Z_MAX_POS)*MINUNITMULT);
+    JOG_LIMIT(HMI_ValueStruct.Move_Z_scaled, (Z_MIN_POS)*MINUNITMULT, (Z_MAX_POS)*MINUNITMULT);
     motion.position.z = HMI_ValueStruct.Move_Z_scaled / MINUNITMULT;
 
     DWIN_Draw_Signed_Float(font8x16, Select_Color, 3, UNITFDIGITS, VALUERANGE_X, MBASE(3), HMI_ValueStruct.Move_Z_scaled);
@@ -7838,20 +7843,23 @@ void HMI_Prepare()
       Goto_MainMenu();
       break;
     case PREPARE_CASE_MOVE: // Axis move
-      if (!HMI_flag.power_back_to_zero_flag)
+      // Not homed: free jog instead of forcing G28. Unhomed axes restart at 0.
+      jog_unhomed = !HMI_flag.power_back_to_zero_flag;
+      if (jog_unhomed)
       {
-        // HMI_flag.power_back_to_zero_flag = true;  //Rock_20230914
-        HMI_flag.leveling_edit_home_flag = false;
-        checkkey = Last_Prepare;
-        index_prepare = MROWS;
-        select_prepare.now = PREPARE_CASE_MOVE;
-        queue.inject_P(G28_STR);
-        Popup_Window_Home();
-        break;
+        if (!motion.axis_was_homed(X_AXIS)) motion.position.x = 0;
+        if (!motion.axis_was_homed(Y_AXIS)) motion.position.y = 0;
+        if (!motion.axis_was_homed(Z_AXIS)) motion.position.z = 0;
+        motion.sync_plan_position();
       }
       checkkey = AxisMove;
       select_axis.reset();
       Draw_Move_Menu();
+      if (jog_unhomed)
+      {
+        Clear_Title_Bar();
+        Draw_Title(F("JOG - NOT HOMED"));
+      }
       gcode.process_subcommands_now(F("G92 E0"));
       DWIN_Draw_Signed_Float(font8x16, Color_Bg_Black, 3, UNITFDIGITS, VALUERANGE_X, MBASE(1), motion.position.x * MINUNITMULT);
       DWIN_Draw_Signed_Float(font8x16, Color_Bg_Black, 3, UNITFDIGITS, VALUERANGE_X, MBASE(2), motion.position.y * MINUNITMULT);
@@ -8543,6 +8551,7 @@ void HMI_AxisMove()
     switch (select_axis.now)
     {
     case 0: // Back
+      jog_unhomed = false;
       checkkey = Prepare;
       select_prepare.set(1);
       index_prepare = MROWS;
@@ -8589,7 +8598,7 @@ void HMI_AxisMove()
 
     case 5:
     { // Probe deploy
-      gcode.process_subcommands_now(F("G0 Z40 F7000"));
+      if (!jog_unhomed) gcode.process_subcommands_now(F("G0 Z40 F7000"));
       gcode.process_subcommands_now(F("G4 P1000"));
       bool r = probe.deploy();
       if (!r)
@@ -8607,7 +8616,7 @@ void HMI_AxisMove()
 
     case 6:
     { // Probe Stow
-      gcode.process_subcommands_now(F("G0 Z40 F7000"));
+      if (!jog_unhomed) gcode.process_subcommands_now(F("G0 Z40 F7000"));
       gcode.process_subcommands_now(F("G4 P1000"));
       bool r2 = probe.stow();
       if (!r2)
