@@ -193,7 +193,7 @@
  
  #if defined(DISPLAY_SLEEP_MINUTES) || defined(LCD_BACKLIGHT_TIMEOUT_MINS)
    #define EDITABLE_DISPLAY_TIMEOUT      // Edit sleep / backlight timeout with M255 S<minutes> and a menu item
-@@ -2464,6 +2479,70 @@
+@@ -2464,6 +2479,71 @@
    #endif
  #endif
  
@@ -248,7 +248,8 @@
 +    #define PAD_SCRAPE_ROUGH_Y    10     // (mm) Rough touch Y
 +    #define PAD_SCRAPE_Y0         50     // (mm) Wipe start
 +    #define PAD_SCRAPE_Y1         20     // (mm) Wipe turning point: Y0->Y1, Y1->Y0, ...
-+    #define PAD_SCRAPE_PASSES      4     // Wipe passes
++    #define PAD_SCRAPE_PASSES      4     // Wipe passes (with ZIGZAG: Y steps from Y0 to Y1)
++    #define PAD_SCRAPE_ZIGZAG     -2     // (mm) One way Y0->Y1, zigzag X between X and X+this (comment out: back and forth)
 +    #define PAD_SCRAPE_SPEED      25     // (mm/s) Wipe speed (the load is read every HX711 sample, ~12.5 ms)
 +    #define PAD_SCRAPE_DEPTH       0.2   // (mm) Deepest wipe height below the rough contact (max 0.4)
 +    #define PAD_SCRAPE_FORCE   15000     // Load held while wiping (~150 g) ...
@@ -264,7 +265,7 @@
  // @section extruder
  
  /**
-@@ -2578,7 +2657,11 @@
+@@ -2578,7 +2658,11 @@
    #define PROBING_MARGIN_LEFT PROBING_MARGIN
    #define PROBING_MARGIN_RIGHT PROBING_MARGIN+10
    #define PROBING_MARGIN_FRONT PROBING_MARGIN
@@ -276,7 +277,7 @@
  #endif
  
  #if ANY(MESH_BED_LEVELING, AUTO_BED_LEVELING_UBL)
-@@ -3463,6 +3546,10 @@
+@@ -3463,6 +3547,10 @@
    #define  X_SLAVE_ADDRESS 0x03
    #define  Y_SLAVE_ADDRESS 0x03
    #define  Z_SLAVE_ADDRESS 0x03
@@ -287,7 +288,7 @@
    //#define X2_SLAVE_ADDRESS 0
    //#define Y2_SLAVE_ADDRESS 0
    //#define Z2_SLAVE_ADDRESS 0
-@@ -3474,7 +3561,7 @@
+@@ -3474,7 +3562,7 @@
    //#define  U_SLAVE_ADDRESS 0
    //#define  V_SLAVE_ADDRESS 0
    //#define  W_SLAVE_ADDRESS 0
@@ -296,7 +297,7 @@
    //#define E1_SLAVE_ADDRESS 0
    //#define E2_SLAVE_ADDRESS 0
    //#define E3_SLAVE_ADDRESS 0
-@@ -4265,9 +4352,7 @@
+@@ -4265,9 +4353,7 @@
  #if ENABLED(GCODE_MACROS)
    #define GCODE_MACROS_SLOTS       5  // Up to 10 may be used
    #define GCODE_MACROS_SLOT_SIZE  50  // Maximum length of a single macro
@@ -306,7 +307,7 @@
  #endif
  
  /**
-@@ -4562,9 +4647,7 @@
+@@ -4562,9 +4648,7 @@
  #if ENABLED(FREEZE_FEATURE)
    //#define FREEZE_PIN   -1   // Override the default (KILL) pin here
    #define FREEZE_STATE  LOW   // State of pin indicating freeze
@@ -316,7 +317,7 @@
    /**
     * Command P000 (REALTIME_REPORTING_COMMANDS and EMERGENCY_PARSER) or
     * FREEZE_PIN (FREEZE_FEATURE) initiates a soft feed hold that keeps
-@@ -4577,9 +4660,7 @@
+@@ -4577,9 +4661,7 @@
     * NOTE: Affects Laser PWM but DOES NOT pause Spindle, Fans, Heaters or other devices.
     */
    //#define SOFT_FEED_HOLD

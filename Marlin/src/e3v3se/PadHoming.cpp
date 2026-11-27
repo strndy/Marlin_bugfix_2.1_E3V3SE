@@ -511,6 +511,9 @@ template<uint8_t N>
     static_assert(PAD_SCRAPE_FLICK_X >= X_MIN_POS && PAD_SCRAPE_FLICK_X < PAD_SCRAPE_X, "PAD_SCRAPE_FLICK_X must be in X_MIN_POS..PAD_SCRAPE_X.");
   #endif
   static_assert(PAD_SCRAPE_RETRACT >= 0 && PAD_SCRAPE_RETRACT <= 10, "PAD_SCRAPE_RETRACT must be 0..10 mm.");
+  #ifdef PAD_SCRAPE_ZIGZAG
+    static_assert(WITHIN(PAD_SCRAPE_X + (PAD_SCRAPE_ZIGZAG), X_MIN_POS, X_MAX_POS) && ABS(PAD_SCRAPE_ZIGZAG) <= 10, "PAD_SCRAPE_X + PAD_SCRAPE_ZIGZAG must be in the X range (|ZIGZAG| <= 10).");
+  #endif
 
   PadScrapeParams pad_scrape_defaults() {
     PadScrapeParams p;
@@ -523,6 +526,11 @@ template<uint8_t N>
     #endif
     p.target = PAD_SCRAPE_FORCE; p.band = PAD_SCRAPE_BAND; p.hard = PAD_SCRAPE_FORCE_MAX;
     p.passes = PAD_SCRAPE_PASSES;
+    #ifdef PAD_SCRAPE_ZIGZAG
+      p.zigzag = PAD_SCRAPE_ZIGZAG;
+    #else
+      p.zigzag = 0;                                    // back and forth
+    #endif
     return p;
   }
 
@@ -658,8 +666,16 @@ template<uint8_t N>
     const PadWipeCtl c = { p.target, p.band, p.hard, -pad_steps(_MIN(p.depth, SCRAPE_FLOOR_MM)), pad_steps(SCRAPE_CEIL_MM),
                            pad_steps(WIPE_NEAR_MM), pad_steps(COARSE_STEP_MM), pad_steps(WIPE_DOWN_MM), pad_steps(COARSE_STEP_MM) };
     bool ended = false;
-    for (uint8_t i = 0; i < p.passes && !ended; ++i)
-      if (!pad_wipe_pass(p, c, r.avg, i + 1, Y_AXIS, (i & 1) ? p.y0 : p.y1, zs, y_moved, ended)) return false;
+    if (p.zigzag) {
+      // One way only, y0 -> y1: Y step, X across, Y step, X back, ... (dirt is pushed one way, never back over the strip)
+      for (uint8_t i = 0; i < p.passes && !ended; ++i) {
+        if (!pad_wipe_pass(p, c, r.avg, 2 * i + 1, Y_AXIS, p.y0 + (p.y1 - p.y0) * float(i + 1) / p.passes, zs, y_moved, ended)) return false;
+        if (i + 1 < p.passes && !ended && !pad_wipe_pass(p, c, r.avg, 2 * i + 2, X_AXIS, (i & 1) ? p.x : p.x + p.zigzag, zs, x_moved, ended)) return false;
+      }
+    }
+    else
+      for (uint8_t i = 0; i < p.passes && !ended; ++i)
+        if (!pad_wipe_pass(p, c, r.avg, i + 1, Y_AXIS, (i & 1) ? p.y0 : p.y1, zs, y_moved, ended)) return false;
     // Flick off the strip edge towards -X at the wipe height: material on the tip stays out there
     if (!ended && p.flick_x < p.x && !pad_wipe_pass(p, c, r.avg, 0, X_AXIS, p.flick_x, zs, x_moved, ended)) return false;
     return ended ? pad_fail(F("load limit, wipe ended early")) : true;
@@ -673,7 +689,8 @@ template<uint8_t N>
    * interrupted); pad_err set, nothing left to lift.
    */
   [[nodiscard]] static bool pad_scrape(const PadScrapeParams &p, const int32_t base, long &zs) {
-    SERIAL_ECHOLNPGM("PAD_SCRAPE: wipe X", p_float_t(p.x, 1), " Y", p_float_t(p.y0, 1), "<->", p_float_t(p.y1, 1), " x", p.passes,
+    SERIAL_ECHOLNPGM("PAD_SCRAPE: wipe X", p_float_t(p.x, 1), " Y", p_float_t(p.y0, 1), p.zigzag ? "->" : "<->", p_float_t(p.y1, 1), " x", p.passes,
+                     p.zigzag ? " zigzag X" : "", p.zigzag ? p_float_t(p.x + p.zigzag, 1) : p_float_t(p.x, 1),
                      " at ", p_float_t(p.speed, 0), " mm/s, load ", p.target, "+-", p.band, " hard ", p.hard,
                      ", depth max ", p_float_t(p.depth, 2), " mm, flick to X", p_float_t(p.flick_x, 1));
     long x_moved = 0, y_moved = 0;

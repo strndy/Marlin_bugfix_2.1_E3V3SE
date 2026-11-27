@@ -2531,7 +2531,8 @@
     #define PAD_SCRAPE_ROUGH_Y    10     // (mm) Rough touch Y
     #define PAD_SCRAPE_Y0         50     // (mm) Wipe start
     #define PAD_SCRAPE_Y1         20     // (mm) Wipe turning point: Y0->Y1, Y1->Y0, ...
-    #define PAD_SCRAPE_PASSES      4     // Wipe passes
+    #define PAD_SCRAPE_PASSES      4     // Wipe passes (with ZIGZAG: Y steps from Y0 to Y1)
+    #define PAD_SCRAPE_ZIGZAG     -2     // (mm) One way Y0->Y1, zigzag X between X and X+this (comment out: back and forth)
     #define PAD_SCRAPE_SPEED      25     // (mm/s) Wipe speed (the load is read every HX711 sample, ~12.5 ms)
     #define PAD_SCRAPE_DEPTH       0.2   // (mm) Deepest wipe height below the rough contact (max 0.4)
     #define PAD_SCRAPE_FORCE   15000     // Load held while wiping (~150 g) ...
