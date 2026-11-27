@@ -125,7 +125,7 @@ void GcodeSuite::M8016() {
     || !WITHIN(p.x + p.zigzag, X_MIN_POS, X_MAX_POS) || ABS(p.zigzag) > 10
     || !WITHIN(p.depth, 0.0f, 0.4f) || !WITHIN(p.speed, 1.0f, 50.0f) || !WITHIN(p.contact, -2.0f, 50.0f)) {
     SERIAL_ECHOLNPGM("M8016: bad parameter (need ", PAD_NOISE_MAX, " < W < S, S + W < L <= 60000, X/R/Y/J in range, |J-Y| >= 5,"
-                      K between X_MIN_POS and X, X+A in range, |A| <= 10, D 0..0.4, F 1..50, Z -2..50)");
+                     " K between X_MIN_POS and X, X+A in range, |A| <= 10, D 0..0.4, F 1..50, Z -2..50)");
     return;
   }
   pad_scrape_only(p);

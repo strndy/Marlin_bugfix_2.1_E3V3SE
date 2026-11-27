@@ -493,7 +493,7 @@ template<uint8_t N>
                   PRECISE_MARGIN_MM = 2;      // precise descent: no pad contact this far below the strip height = fail
   // Free reading at the wipe start vs the baseline before the rough touch: catches a reference taken while
   // loaded; allows the drift of an unsoaked bed over the ~10 s between them (up to ~300 counts/s)
-  constexpr int32_t SCRAPE_REF_TOL = 2 * (PAD_COARSE_TRIGGER);
+  constexpr int32_t SCRAPE_REF_TOL = 8000;             // free reference vs baseline (~80 g)
 
   static_assert(WITHIN(PAD_SCRAPE_X, X_MIN_POS, X_MAX_POS) && WITHIN(PAD_SCRAPE_PARK_X, X_MIN_POS, X_MAX_POS), "PAD_SCRAPE_X/PARK_X are out of the X range.");
   static_assert(WITHIN(PAD_SCRAPE_ROUGH_Y, Y_MIN_POS, Y_MAX_POS) && WITHIN(PAD_SCRAPE_Y0, Y_MIN_POS, Y_MAX_POS)
