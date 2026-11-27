@@ -493,7 +493,7 @@ template<uint8_t N>
                   PRECISE_MARGIN_MM = 2;      // precise descent: no pad contact this far below the strip height = fail
   // Free reading at the wipe start vs the baseline before the rough touch: catches a reference taken while
   // loaded; allows the drift of an unsoaked bed over the ~10 s between them (up to ~300 counts/s)
-  constexpr int32_t SCRAPE_REF_TOL = 2 * (PAD_COARSE_TRIGGER);
+  constexpr int32_t SCRAPE_REF_TOL = 8000;             // free reference vs baseline (~80 g)
 
   static_assert(WITHIN(PAD_SCRAPE_X, X_MIN_POS, X_MAX_POS) && WITHIN(PAD_SCRAPE_PARK_X, X_MIN_POS, X_MAX_POS), "PAD_SCRAPE_X/PARK_X are out of the X range.");
   static_assert(WITHIN(PAD_SCRAPE_ROUGH_Y, Y_MIN_POS, Y_MAX_POS) && WITHIN(PAD_SCRAPE_Y0, Y_MIN_POS, Y_MAX_POS)
@@ -511,6 +511,9 @@ template<uint8_t N>
     static_assert(PAD_SCRAPE_FLICK_X >= X_MIN_POS && PAD_SCRAPE_FLICK_X < PAD_SCRAPE_X, "PAD_SCRAPE_FLICK_X must be in X_MIN_POS..PAD_SCRAPE_X.");
   #endif
   static_assert(PAD_SCRAPE_RETRACT >= 0 && PAD_SCRAPE_RETRACT <= 10, "PAD_SCRAPE_RETRACT must be 0..10 mm.");
+  #ifdef PAD_SCRAPE_ZIGZAG
+    static_assert(WITHIN(PAD_SCRAPE_X + (PAD_SCRAPE_ZIGZAG), X_MIN_POS, X_MAX_POS) && ABS(PAD_SCRAPE_ZIGZAG) <= 10, "PAD_SCRAPE_X + PAD_SCRAPE_ZIGZAG must be in the X range (|ZIGZAG| <= 10).");
+  #endif
 
   PadScrapeParams pad_scrape_defaults() {
     PadScrapeParams p;
@@ -523,6 +526,11 @@ template<uint8_t N>
     #endif
     p.target = PAD_SCRAPE_FORCE; p.band = PAD_SCRAPE_BAND; p.hard = PAD_SCRAPE_FORCE_MAX;
     p.passes = PAD_SCRAPE_PASSES;
+    #ifdef PAD_SCRAPE_ZIGZAG
+      p.zigzag = PAD_SCRAPE_ZIGZAG;
+    #else
+      p.zigzag = 0;                                    // back and forth
+    #endif
     return p;
   }
 
@@ -543,13 +551,19 @@ template<uint8_t N>
    * no relief); the nozzle is lifted to travel height. false = failed (pad_err set).
    */
   [[nodiscard]] static bool pad_wipe_pass(const PadScrapeParams &p, const PadWipeCtl &c, const int32_t ref, const uint8_t pass,
-                                          const AxisEnum axis, const float to, long &zs, long &moved, bool &ended) {
+                                          const AxisEnum axis, const float to, long &zs, long &moved, bool &ended,
+                                          const float dx = 0, long *dx_moved = nullptr) {
+    // dx != 0 (Y passes only): X moves dx along the way at the same time (diagonal, Bresenham on the Y steps)
     const bool is_x = axis == X_AXIS;
     const float spm = pad_spm(), spm_a = planner.settings.axis_steps_per_mm[axis],
                 from = motion.position[axis] + float(moved) / spm_a;
     const long total = lroundf((to - from) * spm_a);
     const bool fwd = total > 0;
     long left = ABS(total);
+    const long x_total = (dx_moved && !is_x) ? lroundf(dx * planner.settings.axis_steps_per_mm[X_AXIS]) : 0;
+    const bool x_fwd = x_total > 0;
+    const long x_n = _MIN(ABS(x_total), left);
+    long x_acc = 0;
     const uint32_t z_us = _MAX(20UL, uint32_t(1000000.0f / (spm * Z_SPEED_MM_S)));
     const float vmax = _MAX(p.speed, float(WIPE_V0_MM_S)), dv2 = 2.0f * WIPE_ACCEL / spm_a;   // v^2 change per step
     const millis_t start = millis(), limit = start + SEC_TO_MS(20) + millis_t(5000.0f * ABS(to - from) / WIPE_V0_MM_S);
@@ -561,7 +575,9 @@ template<uint8_t N>
     FSTR_P err = nullptr;
 
     const bool old_adir = is_x ? X_DIR_READ() : Y_DIR_READ(), old_zdir = Z_DIR_READ();
+    const bool old_xdir = X_DIR_READ();
     if (is_x) X_DIR_WRITE(fwd); else Y_DIR_WRITE(fwd);
+    if (x_n) X_DIR_WRITE(x_fwd);
     bool z_up = false;
     Z_DIR_WRITE(false);
     DELAY_US(100);
@@ -590,6 +606,11 @@ template<uint8_t N>
           if (v > 0) {
             if (is_x) { X_STEP_WRITE(STEP_STATE_X); DELAY_US(2); X_STEP_WRITE(!STEP_STATE_X); }
             else      { Y_STEP_WRITE(STEP_STATE_Y); DELAY_US(2); Y_STEP_WRITE(!STEP_STATE_Y); }
+            if (x_n && (x_acc += x_n) >= ABS(total)) {    // diagonal: X step when due
+              x_acc -= ABS(total);
+              X_STEP_WRITE(STEP_STATE_X); DELAY_US(2); X_STEP_WRITE(!STEP_STATE_X);
+              *dx_moved += x_fwd ? 1 : -1;
+            }
             --left;
             ++fed;
             moved += fwd ? 1 : -1;
@@ -623,10 +644,11 @@ template<uint8_t N>
     }
     const millis_t took = millis() - start;
     if (is_x) X_DIR_WRITE(old_adir); else Y_DIR_WRITE(old_adir);
+    if (x_n) X_DIR_WRITE(old_xdir);
     Z_DIR_WRITE(old_zdir);
     DELAY_US(100);
 
-    SERIAL_ECHOPGM("PAD_SCRAPE: pass ", pass, is_x ? " X" : " Y", p_float_t(from, 1), "->", p_float_t(from + float(fwd ? fed : -fed) / spm_a, 1),
+    SERIAL_ECHOPGM("PAD_SCRAPE: pass ", pass, is_x ? " X" : (x_n ? " XY" : " Y"), p_float_t(from, 1), "->", p_float_t(from + float(fwd ? fed : -fed) / spm_a, 1),
                    ": ", took, " ms, samples=", samples, " (in band ", in_band, ", under the contact ", below, ")");
     if (samples) SERIAL_ECHOPGM(" load min/avg/max=", fmin, "/", int32_t(fsum / int64_t(samples)), "/", fmax);
     SERIAL_ECHOLNPGM(" (~100 counts/g), Z ", p_float_t(float(zs) / spm, 3), " from the contact");
@@ -658,8 +680,17 @@ template<uint8_t N>
     const PadWipeCtl c = { p.target, p.band, p.hard, -pad_steps(_MIN(p.depth, SCRAPE_FLOOR_MM)), pad_steps(SCRAPE_CEIL_MM),
                            pad_steps(WIPE_NEAR_MM), pad_steps(COARSE_STEP_MM), pad_steps(WIPE_DOWN_MM), pad_steps(COARSE_STEP_MM) };
     bool ended = false;
-    for (uint8_t i = 0; i < p.passes && !ended; ++i)
-      if (!pad_wipe_pass(p, c, r.avg, i + 1, Y_AXIS, (i & 1) ? p.y0 : p.y1, zs, y_moved, ended)) return false;
+    if (p.zigzag) {
+      // One way only, y0 -> y1, in 45 degree diagonals: X out by zigzag, back, out, ... (dirt is pushed one way,
+      // never back over the strip). Each diagonal moves |zigzag| in Y; 'passes' is not used.
+      const uint8_t n = constrain(lroundf(ABS(p.y1 - p.y0) / ABS(p.zigzag)), 1, 100);
+      for (uint8_t i = 0; i < n && !ended; ++i)
+        if (!pad_wipe_pass(p, c, r.avg, i + 1, Y_AXIS, p.y0 + (p.y1 - p.y0) * float(i + 1) / n, zs, y_moved, ended,
+                           (i & 1) ? -p.zigzag : p.zigzag, &x_moved)) return false;
+    }
+    else
+      for (uint8_t i = 0; i < p.passes && !ended; ++i)
+        if (!pad_wipe_pass(p, c, r.avg, i + 1, Y_AXIS, (i & 1) ? p.y0 : p.y1, zs, y_moved, ended)) return false;
     // Flick off the strip edge towards -X at the wipe height: material on the tip stays out there
     if (!ended && p.flick_x < p.x && !pad_wipe_pass(p, c, r.avg, 0, X_AXIS, p.flick_x, zs, x_moved, ended)) return false;
     return ended ? pad_fail(F("load limit, wipe ended early")) : true;
@@ -673,7 +704,8 @@ template<uint8_t N>
    * interrupted); pad_err set, nothing left to lift.
    */
   [[nodiscard]] static bool pad_scrape(const PadScrapeParams &p, const int32_t base, long &zs) {
-    SERIAL_ECHOLNPGM("PAD_SCRAPE: wipe X", p_float_t(p.x, 1), " Y", p_float_t(p.y0, 1), "<->", p_float_t(p.y1, 1), " x", p.passes,
+    SERIAL_ECHOLNPGM("PAD_SCRAPE: wipe X", p_float_t(p.x, 1), " Y", p_float_t(p.y0, 1), p.zigzag ? "->" : "<->", p_float_t(p.y1, 1), " x", p.passes,
+                     p.zigzag ? " zigzag X" : "", p.zigzag ? p_float_t(p.x + p.zigzag, 1) : p_float_t(p.x, 1),
                      " at ", p_float_t(p.speed, 0), " mm/s, load ", p.target, "+-", p.band, " hard ", p.hard,
                      ", depth max ", p_float_t(p.depth, 2), " mm, flick to X", p_float_t(p.flick_x, 1));
     long x_moved = 0, y_moved = 0;

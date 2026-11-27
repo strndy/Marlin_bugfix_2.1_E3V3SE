@@ -2507,8 +2507,8 @@
   // 'M8015 T' prints live readings (no motion) to check them against your sensor.
   // Noise = idle min..max after removing slow drift and the 2 highest and 2 lowest samples.
   #define PAD_NOISE_MAX       1500 // Max idle noise; more = homing fails (before descent, after back-off)
-  #define PAD_COARSE_TRIGGER 4000  // Contact threshold of the first descent
-  #define PAD_FINE_TRIGGER   3000  // Contact threshold of the slow measuring passes (>= 2 x PAD_NOISE_MAX)
+  #define PAD_COARSE_TRIGGER 10000 // Contact threshold of the first descent (~100 g)
+  #define PAD_FINE_TRIGGER   10000 // Contact threshold of the slow measuring passes = Z0 force (~100 g, same as the rough touch; >= 2 x PAD_NOISE_MAX)
   // Touch at print temperature: targets already set (nozzle >= 50 °C, bed >= 30 °C, e.g. by the
   // start G-code before G28) are used, otherwise these defaults. Both are waited for, then restored.
   #define PAD_HOME_NOZZLE_TEMP 220 // (°C) Default nozzle temperature. 0 = touch cold, no heating at all.
@@ -2529,9 +2529,10 @@
     #define PAD_SCRAPE_PARK_Y     10
     #define PAD_SCRAPE_X          -5     // (mm) Strip X: left of the sheet, on the bed plate
     #define PAD_SCRAPE_ROUGH_Y    10     // (mm) Rough touch Y
-    #define PAD_SCRAPE_Y0         50     // (mm) Wipe start
+    #define PAD_SCRAPE_Y0         80     // (mm) Wipe start
     #define PAD_SCRAPE_Y1         20     // (mm) Wipe turning point: Y0->Y1, Y1->Y0, ...
-    #define PAD_SCRAPE_PASSES      4     // Wipe passes
+    #define PAD_SCRAPE_PASSES      4     // Wipe passes back and forth (not used with ZIGZAG)
+    #define PAD_SCRAPE_ZIGZAG     -2     // (mm) One way Y0->Y1 in 45 degree diagonals, X between X and X+this (comment out: back and forth)
     #define PAD_SCRAPE_SPEED      25     // (mm/s) Wipe speed (the load is read every HX711 sample, ~12.5 ms)
     #define PAD_SCRAPE_DEPTH       0.2   // (mm) Deepest wipe height below the rough contact (max 0.4)
     #define PAD_SCRAPE_FORCE   15000     // Load held while wiping (~150 g) ...

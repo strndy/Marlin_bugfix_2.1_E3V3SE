@@ -93,6 +93,7 @@ void GcodeSuite::M8015()
  *   L<counts>        hard limit: lift at once, wipe ended
  *   F<mm/s>          wipe speed (1..50)
  *   K<mm>            flick to this X at the end (K = X: no flick)
+ *   A<mm>            zigzag: one way Y -> J in 45 degree diagonals, X between X and X+A (A0: back and forth with P passes)
 *   E0 / E1          switch the wipe in G28 off / on (e.g. while a probe is clipped on); nothing else runs
  *   Z<mm>            expected strip height relative to homed Z0 (default 0). Z10 tests in the air:
  *                    no contact down to Z9, so it stops with "no strip contact in range".
@@ -116,13 +117,15 @@ void GcodeSuite::M8016() {
   if (parser.seenval('L')) p.hard = parser.value_long();
   if (parser.seenval('F')) p.speed = parser.value_float();
   if (parser.seenval('K')) p.flick_x = parser.value_float();
+  if (parser.seenval('A')) p.zigzag = parser.value_float();
   if (parser.seenval('Z')) p.contact = parser.value_float();
   if (!(p.hard <= 60000 && p.band > PAD_NOISE_MAX && p.target > p.band && p.target + p.band < p.hard)
     || !WITHIN(p.x, X_MIN_POS, X_MAX_POS) || !WITHIN(p.flick_x, X_MIN_POS, p.x) || !WITHIN(p.rough_y, Y_MIN_POS, Y_MAX_POS)
     || !WITHIN(p.y0, Y_MIN_POS, Y_MAX_POS) || !WITHIN(p.y1, Y_MIN_POS, Y_MAX_POS) || ABS(p.y1 - p.y0) < 5
+    || !WITHIN(p.x + p.zigzag, X_MIN_POS, X_MAX_POS) || ABS(p.zigzag) > 10
     || !WITHIN(p.depth, 0.0f, 0.4f) || !WITHIN(p.speed, 1.0f, 50.0f) || !WITHIN(p.contact, -2.0f, 50.0f)) {
     SERIAL_ECHOLNPGM("M8016: bad parameter (need ", PAD_NOISE_MAX, " < W < S, S + W < L <= 60000, X/R/Y/J in range, |J-Y| >= 5,"
-                     " K between X_MIN_POS and X, D 0..0.4, F 1..50, Z -2..50)");
+                     " K between X_MIN_POS and X, X+A in range, |A| <= 10, D 0..0.4, F 1..50, Z -2..50)");
     return;
   }
   pad_scrape_only(p);
