@@ -93,7 +93,7 @@ void GcodeSuite::M8015()
  *   L<counts>        hard limit: lift at once, wipe ended
  *   F<mm/s>          wipe speed (1..50)
  *   K<mm>            flick to this X at the end (K = X: no flick)
- *   A<mm>            zigzag: one way Y -> J in P steps, alternating X between X and X+A (A0: back and forth)
+ *   A<mm>            zigzag: one way Y -> J in 45 degree diagonals, X between X and X+A (A0: back and forth with P passes)
 *   E0 / E1          switch the wipe in G28 off / on (e.g. while a probe is clipped on); nothing else runs
  *   Z<mm>            expected strip height relative to homed Z0 (default 0). Z10 tests in the air:
  *                    no contact down to Z9, so it stops with "no strip contact in range".

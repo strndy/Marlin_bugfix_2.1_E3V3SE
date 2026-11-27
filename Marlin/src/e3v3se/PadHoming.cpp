@@ -551,13 +551,19 @@ template<uint8_t N>
    * no relief); the nozzle is lifted to travel height. false = failed (pad_err set).
    */
   [[nodiscard]] static bool pad_wipe_pass(const PadScrapeParams &p, const PadWipeCtl &c, const int32_t ref, const uint8_t pass,
-                                          const AxisEnum axis, const float to, long &zs, long &moved, bool &ended) {
+                                          const AxisEnum axis, const float to, long &zs, long &moved, bool &ended,
+                                          const float dx = 0, long *dx_moved = nullptr) {
+    // dx != 0 (Y passes only): X moves dx along the way at the same time (diagonal, Bresenham on the Y steps)
     const bool is_x = axis == X_AXIS;
     const float spm = pad_spm(), spm_a = planner.settings.axis_steps_per_mm[axis],
                 from = motion.position[axis] + float(moved) / spm_a;
     const long total = lroundf((to - from) * spm_a);
     const bool fwd = total > 0;
     long left = ABS(total);
+    const long x_total = (dx_moved && !is_x) ? lroundf(dx * planner.settings.axis_steps_per_mm[X_AXIS]) : 0;
+    const bool x_fwd = x_total > 0;
+    const long x_n = _MIN(ABS(x_total), left);
+    long x_acc = 0;
     const uint32_t z_us = _MAX(20UL, uint32_t(1000000.0f / (spm * Z_SPEED_MM_S)));
     const float vmax = _MAX(p.speed, float(WIPE_V0_MM_S)), dv2 = 2.0f * WIPE_ACCEL / spm_a;   // v^2 change per step
     const millis_t start = millis(), limit = start + SEC_TO_MS(20) + millis_t(5000.0f * ABS(to - from) / WIPE_V0_MM_S);
@@ -569,7 +575,9 @@ template<uint8_t N>
     FSTR_P err = nullptr;
 
     const bool old_adir = is_x ? X_DIR_READ() : Y_DIR_READ(), old_zdir = Z_DIR_READ();
+    const bool old_xdir = X_DIR_READ();
     if (is_x) X_DIR_WRITE(fwd); else Y_DIR_WRITE(fwd);
+    if (x_n) X_DIR_WRITE(x_fwd);
     bool z_up = false;
     Z_DIR_WRITE(false);
     DELAY_US(100);
@@ -598,6 +606,11 @@ template<uint8_t N>
           if (v > 0) {
             if (is_x) { X_STEP_WRITE(STEP_STATE_X); DELAY_US(2); X_STEP_WRITE(!STEP_STATE_X); }
             else      { Y_STEP_WRITE(STEP_STATE_Y); DELAY_US(2); Y_STEP_WRITE(!STEP_STATE_Y); }
+            if (x_n && (x_acc += x_n) >= ABS(total)) {    // diagonal: X step when due
+              x_acc -= ABS(total);
+              X_STEP_WRITE(STEP_STATE_X); DELAY_US(2); X_STEP_WRITE(!STEP_STATE_X);
+              *dx_moved += x_fwd ? 1 : -1;
+            }
             --left;
             ++fed;
             moved += fwd ? 1 : -1;
@@ -631,10 +644,11 @@ template<uint8_t N>
     }
     const millis_t took = millis() - start;
     if (is_x) X_DIR_WRITE(old_adir); else Y_DIR_WRITE(old_adir);
+    if (x_n) X_DIR_WRITE(old_xdir);
     Z_DIR_WRITE(old_zdir);
     DELAY_US(100);
 
-    SERIAL_ECHOPGM("PAD_SCRAPE: pass ", pass, is_x ? " X" : " Y", p_float_t(from, 1), "->", p_float_t(from + float(fwd ? fed : -fed) / spm_a, 1),
+    SERIAL_ECHOPGM("PAD_SCRAPE: pass ", pass, is_x ? " X" : (x_n ? " XY" : " Y"), p_float_t(from, 1), "->", p_float_t(from + float(fwd ? fed : -fed) / spm_a, 1),
                    ": ", took, " ms, samples=", samples, " (in band ", in_band, ", under the contact ", below, ")");
     if (samples) SERIAL_ECHOPGM(" load min/avg/max=", fmin, "/", int32_t(fsum / int64_t(samples)), "/", fmax);
     SERIAL_ECHOLNPGM(" (~100 counts/g), Z ", p_float_t(float(zs) / spm, 3), " from the contact");
@@ -667,11 +681,12 @@ template<uint8_t N>
                            pad_steps(WIPE_NEAR_MM), pad_steps(COARSE_STEP_MM), pad_steps(WIPE_DOWN_MM), pad_steps(COARSE_STEP_MM) };
     bool ended = false;
     if (p.zigzag) {
-      // One way only, y0 -> y1: Y step, X across, Y step, X back, ... (dirt is pushed one way, never back over the strip)
-      for (uint8_t i = 0; i < p.passes && !ended; ++i) {
-        if (!pad_wipe_pass(p, c, r.avg, 2 * i + 1, Y_AXIS, p.y0 + (p.y1 - p.y0) * float(i + 1) / p.passes, zs, y_moved, ended)) return false;
-        if (i + 1 < p.passes && !ended && !pad_wipe_pass(p, c, r.avg, 2 * i + 2, X_AXIS, (i & 1) ? p.x : p.x + p.zigzag, zs, x_moved, ended)) return false;
-      }
+      // One way only, y0 -> y1, in 45 degree diagonals: X out by zigzag, back, out, ... (dirt is pushed one way,
+      // never back over the strip). Each diagonal moves |zigzag| in Y; 'passes' is not used.
+      const uint8_t n = constrain(lroundf(ABS(p.y1 - p.y0) / ABS(p.zigzag)), 1, 100);
+      for (uint8_t i = 0; i < n && !ended; ++i)
+        if (!pad_wipe_pass(p, c, r.avg, i + 1, Y_AXIS, p.y0 + (p.y1 - p.y0) * float(i + 1) / n, zs, y_moved, ended,
+                           (i & 1) ? -p.zigzag : p.zigzag, &x_moved)) return false;
     }
     else
       for (uint8_t i = 0; i < p.passes && !ended; ++i)
